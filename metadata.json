@@ -1,0 +1,6 @@
+{
+  "name": "Ordexa POS",
+  "description": "Ordexa POS - Super Admin Control Center & License Management System",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
