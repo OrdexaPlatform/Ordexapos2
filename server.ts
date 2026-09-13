@@ -67,80 +67,129 @@ app.post('/api/auth/login', async (req, res) => {
       password,
     });
 
-    // 2. If login failed with invalid credentials, check if this is an existing client or user needing auto-provisioning
+    // 2. If login failed with invalid credentials, check if this is an existing super admin or client user needing auto-provisioning
     if (authResult.error) {
-      // Check if user exists in client_users or clients
-      const { data: clientUser } = await supabaseAdmin
-        .from('client_users')
+      // 2a. Priority Check: Super Admin Users
+      const { data: superAdminRecord } = await supabaseAdmin
+        .from('super_admin_users')
         .select('*')
-        .eq('email', normalizedEmail)
+        .ilike('email', normalizedEmail)
         .maybeSingle();
 
-      const { data: clientRecord } = await supabaseAdmin
-        .from('clients')
-        .select('*')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      if (clientUser || clientRecord) {
-        // Find if an auth user already exists
+      if (superAdminRecord && superAdminRecord.status === 'active') {
         const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
         let authUser = listData?.users?.find(
           (u) => u.email?.toLowerCase() === normalizedEmail
         );
 
-        const clientId = clientUser?.client_id || clientRecord?.id;
-        const userName = clientUser?.name || clientRecord?.owner_name || clientRecord?.customer_name || 'العميل';
-
         if (!authUser) {
-          // Create auth user with provided password
           const { data: createdAuth, error: createAuthErr } =
             await supabaseAdmin.auth.admin.createUser({
               email: normalizedEmail,
               password,
               email_confirm: true,
               user_metadata: {
-                name: userName,
-                role: clientUser?.role || 'owner',
-                client_id: clientId,
+                name: superAdminRecord.name || 'Super Admin',
+                role: 'super_admin',
               },
             });
 
           if (!createAuthErr && createdAuth?.user) {
             authUser = createdAuth.user;
           }
-        } else if (!clientUser || clientUser.last_login_at === null) {
-          // If first-time login / setup, sync password
+        } else {
           await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
             password,
           });
         }
 
-        if (authUser && clientId) {
-          // Ensure client_users has an entry linked to auth_user_id
-          if (!clientUser) {
-            await supabaseAdmin.from('client_users').insert({
-              client_id: clientId,
-              auth_user_id: authUser.id,
-              name: userName,
-              email: normalizedEmail,
-              phone: clientRecord?.phone || null,
-              role: 'owner',
-              status: 'active',
-              custom_permissions: ['all'],
-            });
-          } else if (!clientUser.auth_user_id) {
+        if (authUser) {
+          if (superAdminRecord.id !== authUser.id) {
             await supabaseAdmin
-              .from('client_users')
-              .update({ auth_user_id: authUser.id })
-              .eq('id', clientUser.id);
+              .from('super_admin_users')
+              .update({ id: authUser.id, last_login_at: new Date().toISOString() })
+              .eq('id', superAdminRecord.id);
           }
 
-          // Retry sign-in with the synced password
           authResult = await supabaseAuth.auth.signInWithPassword({
             email: normalizedEmail,
             password,
           });
+        }
+      } else {
+        // 2b. Check if user exists in client_users or clients
+        const { data: clientUser } = await supabaseAdmin
+          .from('client_users')
+          .select('*')
+          .eq('email', normalizedEmail)
+          .maybeSingle();
+
+        const { data: clientRecord } = await supabaseAdmin
+          .from('clients')
+          .select('*')
+          .eq('email', normalizedEmail)
+          .maybeSingle();
+
+        if (clientUser || clientRecord) {
+          // Find if an auth user already exists
+          const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+          let authUser = listData?.users?.find(
+            (u) => u.email?.toLowerCase() === normalizedEmail
+          );
+
+          const clientId = clientUser?.client_id || clientRecord?.id;
+          const userName = clientUser?.name || clientRecord?.owner_name || clientRecord?.customer_name || 'العميل';
+
+          if (!authUser) {
+            // Create auth user with provided password
+            const { data: createdAuth, error: createAuthErr } =
+              await supabaseAdmin.auth.admin.createUser({
+                email: normalizedEmail,
+                password,
+                email_confirm: true,
+                user_metadata: {
+                  name: userName,
+                  role: clientUser?.role || 'owner',
+                  client_id: clientId,
+                },
+              });
+
+            if (!createAuthErr && createdAuth?.user) {
+              authUser = createdAuth.user;
+            }
+          } else if (!clientUser || clientUser.last_login_at === null) {
+            // If first-time login / setup, sync password
+            await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
+              password,
+            });
+          }
+
+          if (authUser && clientId) {
+            // Ensure client_users has an entry linked to auth_user_id
+            if (!clientUser) {
+              await supabaseAdmin.from('client_users').insert({
+                client_id: clientId,
+                auth_user_id: authUser.id,
+                name: userName,
+                email: normalizedEmail,
+                phone: clientRecord?.phone || null,
+                role: 'owner',
+                status: 'active',
+                custom_permissions: ['all'],
+              });
+            } else if (!clientUser.auth_user_id) {
+              await supabaseAdmin
+                .from('client_users')
+                .update({ auth_user_id: authUser.id })
+                .eq('id', clientUser.id);
+            }
+
+            // Retry sign-in with the synced password
+            authResult = await supabaseAuth.auth.signInWithPassword({
+              email: normalizedEmail,
+              password,
+            });
+          }
         }
       }
     }
@@ -154,12 +203,25 @@ app.post('/api/auth/login', async (req, res) => {
 
     const { session, user } = authResult.data;
 
-    // Update last_login_at in client_users if applicable
+    // Update last_login_at in super_admin_users OR client_users
     if (user) {
-      await supabaseAdmin
-        .from('client_users')
-        .update({ last_login_at: new Date().toISOString() })
-        .or(`auth_user_id.eq.${user.id},email.eq.${normalizedEmail}`);
+      const { data: superAdmin } = await supabaseAdmin
+        .from('super_admin_users')
+        .select('id')
+        .or(`id.eq.${user.id},email.ilike.${normalizedEmail}`)
+        .maybeSingle();
+
+      if (superAdmin) {
+        await supabaseAdmin
+          .from('super_admin_users')
+          .update({ last_login_at: new Date().toISOString() })
+          .eq('id', superAdmin.id);
+      } else {
+        await supabaseAdmin
+          .from('client_users')
+          .update({ last_login_at: new Date().toISOString() })
+          .or(`auth_user_id.eq.${user.id},email.eq.${normalizedEmail}`);
+      }
     }
 
     return res.json({

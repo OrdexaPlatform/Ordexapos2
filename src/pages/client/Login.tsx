@@ -1,24 +1,25 @@
 import { useState, FormEvent } from 'react';
-import { Navigate, Link } from 'react-router-dom';
+import { Navigate, Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { loginWithCredentials } from '../../lib/authService';
 import { Loader2, Eye, EyeOff, Store, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export function ClientLogin() {
+  const navigate = useNavigate();
   const { user, userType, isSuperAdmin, initialized, determineUserRole } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // If already authenticated and verified as client user, redirect to /dashboard
+  // If already authenticated: prioritize Super Admin to /super-admin, client to /dashboard
   if (initialized && user) {
-    if (userType === 'client_user') {
-      return <Navigate to="/dashboard" replace />;
-    }
     if (isSuperAdmin) {
       return <Navigate to="/super-admin" replace />;
+    }
+    if (userType === 'client_user') {
+      return <Navigate to="/dashboard" replace />;
     }
   }
 
@@ -44,10 +45,12 @@ export function ClientLogin() {
         await determineUserRole(authUser, session);
         const storeState = useAuthStore.getState();
 
-        if (storeState.userType === 'client_user') {
+        if (storeState.isSuperAdmin) {
+          toast.success('تم تسجيل الدخول بنجاح كمسؤول نظام (Super Admin)');
+          navigate('/super-admin', { replace: true });
+        } else if (storeState.userType === 'client_user') {
           toast.success(`مرحباً بك ${storeState.clientUser?.name || ''}`);
-        } else if (storeState.isSuperAdmin) {
-          toast.success('تم تسجيل الدخول بحساب مسؤول النظام');
+          navigate('/dashboard', { replace: true });
         } else {
           toast.error('هذا الحساب غير مفعل أو غير مرتبط بمنشأة صالحة.');
         }

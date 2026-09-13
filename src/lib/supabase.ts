@@ -18,3 +18,16 @@ export const supabase = createClient(
 
 // We track if it is misconfigured so we can show a warning in the UI
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+// Unauthenticated client instance specifically for reading role definitions and global metadata
+// without triggering recursive RLS policies on relations like super_admin_users
+export const supabaseAnonQuery = createClient(
+  supabaseUrl || 'https://placeholder-url.supabase.co',
+  supabaseAnonKey || 'placeholder-key',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  }
+);

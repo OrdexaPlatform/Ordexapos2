@@ -15,7 +15,7 @@ export function ClientProtectedRoute() {
 
   // Load client data & device data once clientUser is detected
   useEffect(() => {
-    if (clientUser?.client_id) {
+    if (!isSuperAdmin && clientUser?.client_id) {
       if (!client || client.id !== clientUser.client_id) {
         loadClient(clientUser.client_id);
       }
@@ -23,7 +23,7 @@ export function ClientProtectedRoute() {
         initializeDevice(clientUser.client_id);
       }
     }
-  }, [clientUser?.client_id, client?.id, deviceStatus, initializeDevice, loadClient]);
+  }, [isSuperAdmin, clientUser?.client_id, client?.id, deviceStatus, initializeDevice, loadClient]);
 
   if (!initialized || loading) {
     return (
@@ -38,8 +38,8 @@ export function ClientProtectedRoute() {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  // If Super Admin accidentally navigates to /dashboard or POS routes, redirect them to /super-admin
-  if (isSuperAdmin && !clientUser) {
+  // If Super Admin accesses client POS routes directly, redirect them to /super-admin
+  if (isSuperAdmin) {
     return <Navigate to="/super-admin" replace />;
   }
 

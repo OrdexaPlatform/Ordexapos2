@@ -1,11 +1,12 @@
 import { useState, FormEvent } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { loginWithCredentials } from '../../lib/authService';
 import { Loader2, Eye, EyeOff, LayoutDashboard } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export function Login() {
+  const navigate = useNavigate();
   const { isSuperAdmin, initialized, checkAdminRole } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -37,12 +38,12 @@ export function Login() {
 
       if (authUser && session) {
         await checkAdminRole(authUser, session);
-        // checkAdminRole will update the store and trigger redirect via component re-render if successful
         const storeState = useAuthStore.getState();
         if (!storeState.isSuperAdmin) {
            toast.error('ليس لديك صلاحيات الدخول لمركز التحكم.');
         } else {
            toast.success('تم تسجيل الدخول بنجاح.');
+           navigate('/super-admin', { replace: true });
         }
       }
     } catch (error: any) {

@@ -10,8 +10,13 @@ interface LicenseGuardProps {
 
 export function LicenseGuard({ children }: LicenseGuardProps) {
   const { client, license, effectiveLicenseStatus, loading, loadClient } = useClientStore();
-  const { signOut } = useAuthStore();
+  const { signOut, isSuperAdmin } = useAuthStore();
   const [reloading, setReloading] = React.useState(false);
+
+  // Super Admin bypass: Super Admins are never blocked by Client License checks
+  if (isSuperAdmin) {
+    return <>{children}</>;
+  }
 
   const handleRefresh = async () => {
     if (client?.id) {

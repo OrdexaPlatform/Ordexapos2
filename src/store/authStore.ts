@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseAnonQuery } from '../lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 import type { ClientUser } from '../types';
 
@@ -96,14 +96,58 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   determineUserRole: async (user: User, session: Session) => {
     set({ loading: true });
     try {
-      // 1. Check if user is a Super Admin
-      const { data: adminData, error: adminErr } = await supabase
-        .from('super_admin_users')
-        .select('role, status')
-        .eq('id', user.id)
-        .maybeSingle();
+      const normalizedEmail = (user.email || '').trim().toLowerCase();
 
-      if (!adminErr && adminData && (adminData.role === 'super_admin' || adminData.role === 'admin') && adminData.status === 'active') {
+      // 1. Check if user is a Super Admin (check by ID or by email) - STRICT PRIORITY
+      let adminData: any = null;
+      
+      // Use supabaseAnonQuery to bypass recursive RLS policies on super_admin_users
+      try {
+        const { data: byIdData } = await supabaseAnonQuery
+          .from('super_admin_users')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (byIdData) {
+          adminData = byIdData;
+        } else if (normalizedEmail) {
+          const { data: byEmailData } = await supabaseAnonQuery
+            .from('super_admin_users')
+            .select('*')
+            .ilike('email', normalizedEmail)
+            .maybeSingle();
+          if (byEmailData) {
+            adminData = byEmailData;
+          }
+        }
+      } catch (adminQueryErr) {
+        console.warn('Super admin query exception:', adminQueryErr);
+      }
+
+      if (adminData && (adminData.role === 'super_admin' || adminData.role === 'admin' || adminData.role === 'viewer') && adminData.status === 'active') {
+        // Sync user.id if it differed
+        if (adminData.id !== user.id) {
+          try {
+            await supabaseAnonQuery
+              .from('super_admin_users')
+              .update({ id: user.id, last_login_at: new Date().toISOString() })
+              .eq('email', normalizedEmail);
+          } catch (e) {
+            console.warn('Could not sync super_admin user id:', e);
+          }
+        } else {
+          try {
+            await supabaseAnonQuery
+              .from('super_admin_users')
+              .update({ last_login_at: new Date().toISOString() })
+              .eq('id', user.id);
+          } catch (e) {
+            console.warn('Could not update super_admin last_login_at:', e);
+          }
+        }
+
+        // STRICT SEPARATION: Super Admin is pure Super Admin, clientUser is always null
         set({
           user,
           session,
@@ -121,7 +165,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const { data: clientUserData, error: clientUserErr } = await supabase
           .from('client_users')
           .select('*')
-          .or(`auth_user_id.eq.${user.id},email.eq.${user.email || ''}`)
+          .or(`auth_user_id.eq.${user.id},email.eq.${normalizedEmail}`)
           .maybeSingle();
 
         if (!clientUserErr && clientUserData) {

@@ -12,9 +12,14 @@ interface DeviceGuardProps {
 export function DeviceGuard({ children }: DeviceGuardProps) {
   const { status, fingerprint, isActivated, errorMessage, initializeDevice } = useDeviceStore();
   const { client, license, effectiveLicenseStatus } = useClientStore();
-  const { signOut } = useAuthStore();
+  const { signOut, isSuperAdmin } = useAuthStore();
   const [copied, setCopied] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Super Admin bypass: Super Admins are never blocked by Device Activation or Device Fingerprint
+  if (isSuperAdmin) {
+    return <>{children}</>;
+  }
 
   const handleCopyFingerprint = () => {
     navigator.clipboard.writeText(fingerprint);
