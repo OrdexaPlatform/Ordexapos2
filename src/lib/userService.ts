@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { ClientUser, ClientUserRole, ClientUserStatus } from '../types';
 import { logActivity } from './activityLogger';
+import { provisionUserViaApi } from './authService';
 
 export interface CreateClientUserInput {
   client_id: string;
@@ -62,7 +63,7 @@ export async function fetchClientUsers(
 
 /**
  * Creates/provisions a new client user.
- * Tries the secure Edge Function first, then safely falls back to standard authorized DB record.
+ * Tries the backend API route first, then safely falls back to direct DB record.
  */
 export async function provisionClientUser(
   input: CreateClientUserInput
@@ -70,43 +71,27 @@ export async function provisionClientUser(
   const normalizedEmail = input.email.trim().toLowerCase();
   const normalizedName = input.name.trim();
 
-  // 1. Try secure Supabase Edge Function
-  if (input.password && input.password.length >= 6) {
-    try {
-      const { data: edgeData, error: edgeError } = await supabase.functions.invoke(
-        'provision-client-user',
-        {
-          body: {
-            client_id: input.client_id,
-            name: normalizedName,
-            email: normalizedEmail,
-            password: input.password,
-            phone: input.phone?.trim() || null,
-            role: input.role,
-            status: input.status || 'active',
-            custom_permissions: input.custom_permissions || [],
-          },
-        }
-      );
+  // 1. Try secure backend server API
+  try {
+    const apiResult = await provisionUserViaApi({
+      client_id: input.client_id,
+      name: normalizedName,
+      email: normalizedEmail,
+      password: input.password,
+      phone: input.phone?.trim(),
+      role: input.role,
+      status: input.status || 'active',
+      custom_permissions: input.custom_permissions || [],
+    });
 
-      if (!edgeError && edgeData?.user) {
-        return {
-          user: edgeData.user as ClientUser,
-          isAuthLinked: true,
-          message: 'تم إنشاء المستخدم وحساب الدخول بنجاح عبر الخادم الآمن.',
-        };
-      }
-
-      if (edgeError && !edgeError.message?.includes('Failed to send') && !edgeError.message?.includes('404')) {
-        // Known business error from Edge Function (e.g. Email exists or forbidden)
-        throw new Error(edgeData?.error || edgeError.message);
-      }
-    } catch (edgeCallErr: any) {
-      // If error is explicit business validation, bubble it up
-      if (edgeCallErr.message && !edgeCallErr.message.includes('Failed to send') && !edgeCallErr.message.includes('FunctionsFetchError')) {
-        throw edgeCallErr;
-      }
-      console.info('Edge function offline or not yet deployed. Using secure database provisioning.');
+    if (apiResult?.user) {
+      return apiResult;
+    }
+  } catch (apiErr: any) {
+    console.info('Backend provision API unavailable or returned error, falling back to direct DB insert:', apiErr?.message);
+    if (apiErr.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('NetworkError')) {
+      // If server returned specific business error (e.g. invalid input), throw it
+      throw apiErr;
     }
   }
 

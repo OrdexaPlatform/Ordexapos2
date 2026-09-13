@@ -2,10 +2,14 @@ import { useState } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
 import { useDeviceStore } from '../../store/deviceStore';
-import { LogOut, MonitorCheck, Shield, User, Building, Download, Monitor } from 'lucide-react';
+import { LogOut, MonitorCheck, Shield, User, Building, Download, Monitor, Menu } from 'lucide-react';
 import { ClientUserRole } from '../../types';
 
-export function ClientHeader() {
+interface ClientHeaderProps {
+  onOpenSidebar?: () => void;
+}
+
+export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
   const { clientUser, signOut } = useAuthStore();
   const { client } = useClientStore();
   const { isActivated, deviceName, fingerprint } = useDeviceStore();
@@ -34,14 +38,25 @@ export function ClientHeader() {
 
   return (
     <>
-      <header className="sticky top-0 z-40 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 shadow-sm sm:px-6 lg:px-8">
-        {/* Business Name & Breadcrumb */}
+      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 shadow-sm sm:px-6 lg:px-8">
+        {/* Mobile menu toggle + Business Name */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-slate-800 font-bold text-base">
-            <Building className="h-5 w-5 text-indigo-600" />
-            <span>{client?.business_name || 'نظام إدارة نقاط البيع'}</span>
+          <button
+            type="button"
+            id="client-mobile-menu-btn"
+            onClick={onOpenSidebar}
+            className="p-2 -m-2 text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors lg:hidden flex items-center justify-center"
+            aria-label="فتح القائمة الجانبية"
+          >
+            <Menu className="h-6 w-6" />
+          </button>
+
+          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm sm:text-base">
+            <Building className="h-5 w-5 text-indigo-600 shrink-0" />
+            <span className="truncate max-w-[160px] sm:max-w-xs">{client?.business_name || 'نظام إدارة نقاط البيع'}</span>
           </div>
         </div>
+
 
         {/* Center/Right Status Badges & User Profile */}
         <div className="flex items-center gap-3 sm:gap-4">

@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Navigate, Link } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
-import { supabase } from '../../lib/supabase';
+import { loginWithCredentials } from '../../lib/authService';
 import { Loader2, Eye, EyeOff, Store, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -31,17 +31,17 @@ export function ClientLogin() {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+      const { user: authUser, session, error } = await loginWithCredentials(
+        email.trim(),
+        password
+      );
 
       if (error) {
         throw error;
       }
 
-      if (data.user && data.session) {
-        await determineUserRole(data.user, data.session);
+      if (authUser && session) {
+        await determineUserRole(authUser, session);
         const storeState = useAuthStore.getState();
 
         if (storeState.userType === 'client_user') {
@@ -54,8 +54,13 @@ export function ClientLogin() {
       }
     } catch (error: any) {
       console.error('Client login error:', error);
-      if (error.message && (error.message.includes('معطل') || error.message.includes('حسابك'))) {
-        toast.error(error.message);
+      const msg = error?.message || '';
+      if (msg.includes('معطل') || msg.includes('حسابك')) {
+        toast.error(msg);
+      } else if (msg.includes('الإنترنت') || msg.includes('الخادم')) {
+        toast.error(msg);
+      } else if (msg.toLowerCase().includes('fetch') || error?.name === 'TypeError') {
+        toast.error('تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.');
       } else {
         toast.error('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
       }

@@ -1,3 +1,4 @@
+import { ClientPreviewPage } from './pages/super-admin/ClientPreviewPage';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -99,6 +100,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="clients" element={<Clients />} />
             <Route path="clients/:id" element={<ClientDetails />} />
+            <Route path="clients/:id/preview" element={<ClientPreviewPage />} />
             <Route path="licenses" element={<Licenses />} />
             <Route path="licenses/:id" element={<LicenseDetails />} />
             <Route path="devices" element={<Devices />} />

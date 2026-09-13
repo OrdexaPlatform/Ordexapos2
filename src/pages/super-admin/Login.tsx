@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
-import { supabase } from '../../lib/supabase';
+import { loginWithCredentials } from '../../lib/authService';
 import { Loader2, Eye, EyeOff, LayoutDashboard } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -26,17 +26,17 @@ export function Login() {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { user: authUser, session, error } = await loginWithCredentials(
+        email.trim(),
+        password
+      );
 
       if (error) {
         throw error;
       }
 
-      if (data.user && data.session) {
-        await checkAdminRole(data.user, data.session);
+      if (authUser && session) {
+        await checkAdminRole(authUser, session);
         // checkAdminRole will update the store and trigger redirect via component re-render if successful
         const storeState = useAuthStore.getState();
         if (!storeState.isSuperAdmin) {
@@ -47,7 +47,12 @@ export function Login() {
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      toast.error('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+      const msg = error?.message || '';
+      if (msg.includes('الإنترنت') || msg.includes('الخادم')) {
+        toast.error(msg);
+      } else {
+        toast.error('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+      }
     } finally {
       setLoading(false);
     }

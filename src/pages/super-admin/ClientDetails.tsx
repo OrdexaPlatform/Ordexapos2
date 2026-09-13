@@ -2,37 +2,45 @@ import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { logActivity } from '../../lib/activityLogger';
-import { Client, License, Device } from '../../types';
+import { Client, License, ClientUser } from '../../types';
+import { CustomerPackageStatus, CustomerDeliverySummaryData } from '../../types/delivery';
 import { Modal } from '../../components/ui/Modal';
 import { ClientForm } from './ClientForm';
 import { LicenseFormModal } from './LicenseFormModal';
+import { AddClientUserModal } from '../../components/super-admin/AddClientUserModal';
+import { ClientUsersCard } from '../../components/super-admin/ClientUsersCard';
+import { DeliveryChecklistCard } from '../../components/super-admin/DeliveryChecklistCard';
+import { CustomerDeliveryModal } from '../../components/super-admin/CustomerDeliveryModal';
+import { generatePreviewToken } from '../../lib/previewTokenService';
 import { 
   getLicenseStatusBadge, 
   getLicenseTypeLabel, 
   getEffectiveLicenseStatus 
 } from '../../lib/licenseUtils';
+import { toggleClientUserStatus } from '../../lib/userService';
 import { 
   ArrowRight, 
+  Building2, 
+  Phone, 
+  Mail, 
+  MapPin, 
+  DollarSign, 
+  Globe, 
   Edit3, 
   Plus, 
   Key, 
   Smartphone, 
-  DownloadCloud, 
   Layers, 
+  DownloadCloud, 
   Loader2, 
   AlertCircle, 
+  ExternalLink, 
   CheckCircle2, 
   Ban, 
-  ShieldAlert, 
-  Calendar, 
-  ExternalLink,
-  Building2,
   User,
-  Phone,
-  Mail,
-  MapPin,
-  Globe,
-  DollarSign
+  Sparkles,
+  Eye,
+  Laptop
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -43,6 +51,7 @@ export function ClientDetails() {
 
   const [client, setClient] = useState<Client | null>(null);
   const [licenses, setLicenses] = useState<License[]>([]);
+  const [users, setUsers] = useState<ClientUser[]>([]);
   const [deviceCount, setDeviceCount] = useState<number>(0);
   const [downloadCount, setDownloadCount] = useState<number>(0);
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
@@ -53,6 +62,8 @@ export function ClientDetails() {
   // Modals
   const [isEditClientModalOpen, setIsEditClientModalOpen] = useState(false);
   const [isNewLicenseModalOpen, setIsNewLicenseModalOpen] = useState(false);
+  const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
 
   const fetchClientData = async () => {
     if (!id) return;
@@ -85,7 +96,18 @@ export function ClientDetails() {
       if (licErr) throw licErr;
       setLicenses(licensesData || []);
 
-      // 3. Fetch device count
+      // 3. Fetch client users
+      const { data: usersData, error: userErr } = await supabase
+        .from('client_users')
+        .select('*')
+        .eq('client_id', id)
+        .order('created_at', { ascending: false });
+
+      if (!userErr && usersData) {
+        setUsers(usersData);
+      }
+
+      // 4. Fetch device count
       const { count: devCount, error: devErr } = await supabase
         .from('devices')
         .select('id', { count: 'exact', head: true })
@@ -95,7 +117,7 @@ export function ClientDetails() {
         setDeviceCount(devCount);
       }
 
-      // Also get latest app version from devices if any
+      // Get latest app version from devices if any
       const { data: latestDevice } = await supabase
         .from('devices')
         .select('app_version')
@@ -109,7 +131,7 @@ export function ClientDetails() {
         setCurrentVersion(latestDevice.app_version);
       }
 
-      // 4. Fetch downloads count
+      // 5. Fetch downloads count
       const { count: dlCount, error: dlErr } = await supabase
         .from('client_downloads')
         .select('id', { count: 'exact', head: true })
@@ -142,29 +164,41 @@ export function ClientDetails() {
         );
       case 'inactive':
         return (
-          <span className="inline-flex items-center rounded-md bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600 ring-1 ring-inset ring-gray-500/10">
+          <span className="inline-flex items-center rounded-md bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/10">
             غير نشط
           </span>
         );
       case 'suspended':
         return (
-          <span className="inline-flex items-center rounded-md bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20">
+          <span className="inline-flex items-center rounded-md bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/10">
             موقوف
           </span>
         );
       default:
-        return status || '—';
+        return null;
     }
   };
 
-  // Quick License Status change
+  // Toggle user status
+  const handleToggleUserStatus = async (userId: string, currentStatus: string) => {
+    if (!client) return;
+    const nextStatus = currentStatus === 'active' ? 'inactive' : 'active';
+    try {
+      await toggleClientUserStatus(userId, client.id, nextStatus as any);
+      toast.success('تم تحديث حالة المستخدم بنجاح');
+      fetchClientData();
+    } catch (err: any) {
+      toast.error('فشل في تحديث حالة المستخدم');
+    }
+  };
+
+  // Quick License status update (Suspend / Activate)
   const handleLicenseStatusChange = async (licenseId: string, newStatus: string) => {
     const statusLabels: Record<string, string> = {
       active: 'تفعيل',
       suspended: 'إيقاف',
       revoked: 'إلغاء نهائي',
     };
-
     if (!window.confirm(`هل أنت متأكد من ${statusLabels[newStatus] || newStatus} هذا الترخيص؟`)) {
       return;
     }
@@ -218,13 +252,50 @@ export function ClientDetails() {
     );
   }
 
-  // Find most relevant active or latest license for overview card
+  // Calculate active license and owner
   const activeLicense = licenses.find(
     (l) => getEffectiveLicenseStatus(l.status, l.expiry_date) === 'active'
-  );
+  ) || licenses[0] || null;
+
+  const ownerUser = users.find((u) => u.role === 'owner') || users[0] || null;
+
+  // Delivery Checklist State
+  const deliveryStatus: CustomerPackageStatus = {
+    clientCreated: true,
+    licenseConfigured: !!activeLicense,
+    whiteLabelConfigured: !!(client.business_name && client.phone),
+    ownerCreated: !!ownerUser,
+    previewReady: true,
+    previewReviewed: true,
+    downloadReady: true,
+    readyForDelivery: !!(activeLicense && ownerUser),
+  };
+
+  const previewToken = generatePreviewToken(client.id, client.client_code);
+  const previewUrl = `/super-admin/clients/${client.id}/preview?token=${previewToken}`;
+
+  const deliverySummary: CustomerDeliverySummaryData = {
+    client,
+    license: activeLicense,
+    owner: ownerUser,
+    downloads: {
+      portableZip: {
+        name: 'Ordexa-POS-Windows-Portable.zip',
+        size: '249 MB',
+        url: '/downloads/Ordexa-POS-Windows-Portable.zip',
+      },
+      installerExe: {
+        name: 'Ordexa-POS-Desktop-Setup.exe',
+        size: '186 KB',
+        url: '/downloads/Ordexa-POS-Desktop-Setup.exe',
+      },
+    },
+    previewUrl,
+    activationInstructions: 'فعل الترخيص بعد تنزيل التطبيق وفتحه.',
+  };
 
   return (
-    <div className="space-y-6 text-right">
+    <div className="space-y-6 text-right" dir="rtl">
       {/* Back button & Breadcrumb */}
       <div className="flex items-center justify-between">
         <Link
@@ -268,21 +339,31 @@ export function ClientDetails() {
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Link
-              to={`/super-admin/builds`}
-              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-3.5 py-2 text-sm font-medium text-indigo-700 border border-indigo-200 hover:bg-indigo-100 shadow-sm transition-colors"
+              to={previewUrl}
+              target="_blank"
+              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-3.5 py-2 text-sm font-semibold text-indigo-700 border border-indigo-200 hover:bg-indigo-100 shadow-sm transition-colors"
             >
-              <Layers className="h-4 w-4" />
-              <span>إصدارات التطبيق</span>
+              <Eye className="h-4 w-4" />
+              <span>معاينة واجهة العميل (Preview)</span>
             </Link>
+
+            <button
+              type="button"
+              onClick={() => setIsDeliveryModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 shadow-sm transition-colors"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              <span>ملف تسليم العميل</span>
+            </button>
 
             <button
               onClick={() => setIsEditClientModalOpen(true)}
               className="inline-flex items-center gap-2 rounded-md bg-white px-3.5 py-2 text-sm font-medium text-slate-700 border border-slate-300 hover:bg-slate-50 shadow-sm transition-colors"
             >
               <Edit3 className="h-4 w-4" />
-              <span>تعديل بيانات العميل</span>
+              <span>تعديل البيانات</span>
             </button>
 
             <button
@@ -290,13 +371,22 @@ export function ClientDetails() {
               className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 shadow-sm transition-colors"
             >
               <Plus className="h-4 w-4" />
-              <span>إصدار ترخيص جديد</span>
+              <span>إصدار ترخيص</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Overview Cards (Real Data or Clean Empty State) */}
+      {/* Delivery Checklist Progress Card */}
+      <DeliveryChecklistCard
+        status={deliveryStatus}
+        onOpenNewLicenseModal={() => setIsNewLicenseModalOpen(true)}
+        onOpenOwnerUserModal={() => setIsAddUserModalOpen(true)}
+        onOpenPreview={() => window.open(previewUrl, '_blank')}
+        onOpenDeliverySummary={() => setIsDeliveryModalOpen(true)}
+      />
+
+      {/* Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* 1. License Status Card */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200">
@@ -383,14 +473,14 @@ export function ClientDetails() {
             </div>
           ) : (
             <div>
-              <div className="text-base font-semibold text-slate-400">لا توجد تحميلات</div>
-              <p className="text-xs text-slate-400 mt-1">لم يتم إصدار رابط تثبيت بعد</p>
+              <div className="text-base font-semibold text-slate-400">حزم التنزيل جاهزة</div>
+              <p className="text-xs text-slate-400 mt-1">Windows Setup & Portable Zip</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* Main Grid: Client Info + Licenses History */}
+      {/* Main Grid: Client Info + Client Users */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Client Info Column */}
         <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-6">
@@ -464,7 +554,6 @@ export function ClientDetails() {
                 </div>
                 <div className="font-semibold text-slate-800 font-mono">{client.currency}</div>
               </div>
-
               <div>
                 <div className="text-xs font-medium text-slate-400 flex items-center gap-1 mb-0.5">
                   <Globe className="h-3.5 w-3.5" />
@@ -481,8 +570,16 @@ export function ClientDetails() {
           </div>
         </div>
 
-        {/* Licenses List Column (Client 1 -> Many Licenses) */}
-        <div className="lg:col-span-2 space-y-4">
+        {/* Column 2 & 3: Users & Licenses */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Client Users Section */}
+          <ClientUsersCard
+            users={users}
+            onAddUser={() => setIsAddUserModalOpen(true)}
+            onToggleStatus={handleToggleUserStatus}
+          />
+
+          {/* Licenses List Section */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
               <div>
@@ -533,7 +630,6 @@ export function ClientDetails() {
                     {licenses.map((lic) => {
                       const effectiveStatus = getEffectiveLicenseStatus(lic.status, lic.expiry_date);
                       const badge = getLicenseStatusBadge(lic.status, lic.expiry_date);
-
                       return (
                         <tr key={lic.id} className="hover:bg-slate-50 transition-colors">
                           <td className="whitespace-nowrap px-5 py-3 text-sm font-mono text-slate-900" dir="ltr">
@@ -570,7 +666,6 @@ export function ClientDetails() {
                               >
                                 عرض
                               </Link>
-
                               {effectiveStatus === 'active' ? (
                                 <button
                                   onClick={() => handleLicenseStatusChange(lic.id, 'suspended')}
@@ -627,6 +722,24 @@ export function ClientDetails() {
           fetchClientData();
         }}
         defaultClientId={client.id}
+      />
+
+      {/* Add Client User Modal */}
+      <AddClientUserModal
+        isOpen={isAddUserModalOpen}
+        onClose={() => setIsAddUserModalOpen(false)}
+        clientId={client.id}
+        defaultRole="owner"
+        onSuccess={() => {
+          fetchClientData();
+        }}
+      />
+
+      {/* Delivery Summary Dossier Modal */}
+      <CustomerDeliveryModal
+        isOpen={isDeliveryModalOpen}
+        onClose={() => setIsDeliveryModalOpen(false)}
+        summary={deliverySummary}
       />
     </div>
   );
