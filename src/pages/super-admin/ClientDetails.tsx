@@ -343,10 +343,12 @@ export function ClientDetails() {
             <Link
               to={previewUrl}
               target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-md bg-indigo-50 px-3.5 py-2 text-sm font-semibold text-indigo-700 border border-indigo-200 hover:bg-indigo-100 shadow-sm transition-colors"
+              title="فتح شاشة المعاينة الحية للعميل في نافذة جديدة"
             >
               <Eye className="h-4 w-4" />
-              <span>معاينة واجهة العميل (Preview)</span>
+              <span>معاينة واجهة العميل (Live Client Preview)</span>
             </Link>
 
             <button

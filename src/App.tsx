@@ -94,13 +94,15 @@ export default function App() {
         <Route path="/login" element={<ClientLogin />} />
         <Route path="/super-admin/login" element={<Login />} />
         
+        {/* Super Admin Client Live Preview Route (Secure Token or Super Admin session, Full-Screen) */}
+        <Route path="/super-admin/clients/:id/preview" element={<ClientPreviewPage />} />
+
         {/* Super Admin Control Center Routes */}
         <Route element={<ProtectedRoute />}>
           <Route path="/super-admin" element={<SuperAdminLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="clients" element={<Clients />} />
             <Route path="clients/:id" element={<ClientDetails />} />
-            <Route path="clients/:id/preview" element={<ClientPreviewPage />} />
             <Route path="licenses" element={<Licenses />} />
             <Route path="licenses/:id" element={<LicenseDetails />} />
             <Route path="devices" element={<Devices />} />
