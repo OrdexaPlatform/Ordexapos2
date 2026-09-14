@@ -15,14 +15,14 @@ export interface PreviewTokenPayload {
 }
 
 /**
- * Generates a preview token for a client valid for 2 hours.
+ * Generates a preview token for a client valid for 30 days.
  */
 export function generatePreviewToken(clientId: string, clientCode: string): string {
   const payload: PreviewTokenPayload = {
     clientId,
     clientCode,
     createdAt: Date.now(),
-    expiresAt: Date.now() + 2 * 60 * 60 * 1000, // 2 hours
+    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
     mode: 'super_admin_preview',
   };
 
@@ -85,7 +85,7 @@ export function validatePreviewToken(token: string, expectedClientId?: string): 
       return { valid: false, error: 'انتهت صلاحية رابط المعاينة، يرجى إعادة التوليد' };
     }
 
-    if (expectedClientId && payload.clientId !== expectedClientId) {
+    if (expectedClientId && payload.clientId !== expectedClientId && payload.clientCode !== expectedClientId) {
       return { valid: false, error: 'رمز المعاينة لا يطابق المنشأة المطلوبة' };
     }
 

@@ -72,6 +72,9 @@ export function CustomerDeliveryModal({
 البريد الإلكتروني: ${owner?.email || client.email || '---'}
 الدور: مالك المنشأة (Owner)
 
+[رابط المعاينة الحية للواجهة (Web Preview)]
+${window.location.origin}${previewUrl}
+
 [روابط التثبيت والتشغيل المباشر للكمبيوتر]
 رابط النسخة المحمولة (Portable ZIP):
 ${window.location.origin}${downloads.portableZip.url}
@@ -80,9 +83,10 @@ ${window.location.origin}${downloads.portableZip.url}
 ${window.location.origin}${downloads.installerExe.url}
 
 [تعليمات التفعيل السريع]
-1. قم بفك ضغط ملف النسخة المحمولة أو تثبيت ملف Setup على جهاز الكاشير.
-2. افتح تطبيق Ordexa POS Desktop وسجل الدخول بحساب المالك.
-3. أدخل مفتاح الترخيص أعلاه عند المطالبة لتسجيل الجهاز وبدء البيع.
+1. يمكنك إرسال رابط المعاينة الحية أعلاه للعميل لمعاينة الكاشير والأصناف مباشرة من أي متصفح.
+2. قم بفك ضغط ملف النسخة المحمولة أو تثبيت ملف Setup على جهاز الكاشير.
+3. افتح تطبيق Ordexa POS Desktop وسجل الدخول بحساب المالك.
+4. أدخل مفتاح الترخيص أعلاه عند المطالبة لتسجيل الجهاز وبدء البيع.
 =========================================
 `.trim();
 
@@ -253,16 +257,27 @@ ${window.location.origin}${downloads.installerExe.url}
         </div>
 
         {/* Modal Actions */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-          <a
-            href={previewUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800"
-          >
-            <ExternalLink className="h-4 w-4" />
-            <span>فتح شاشة المعاينة الحية للعميل</span>
-          </a>
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-200">
+          <div className="flex items-center gap-3">
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+            >
+              <ExternalLink className="h-4 w-4" />
+              <span>فتح شاشة المعاينة الحية للعميل</span>
+            </a>
+            <span className="text-slate-300">|</span>
+            <button
+              type="button"
+              onClick={() => handleCopy(`${window.location.origin}${previewUrl}`, 'link')}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-slate-900"
+            >
+              {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+              <span>{copiedLink ? 'تم نسخ الرابط' : 'نسخ رابط المعاينة'}</span>
+            </button>
+          </div>
           <button
             type="button"
             onClick={onClose}

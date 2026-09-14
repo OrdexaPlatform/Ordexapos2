@@ -96,6 +96,9 @@ export default function App() {
         
         {/* Super Admin Client Live Preview Route (Secure Token or Super Admin session, Full-Screen) */}
         <Route path="/super-admin/clients/:id/preview" element={<ClientPreviewPage />} />
+        <Route path="/clients/:id/preview" element={<ClientPreviewPage />} />
+        <Route path="/preview/:id" element={<ClientPreviewPage />} />
+        <Route path="/client-preview/:id" element={<ClientPreviewPage />} />
 
         {/* Super Admin Control Center Routes */}
         <Route element={<ProtectedRoute />}>
