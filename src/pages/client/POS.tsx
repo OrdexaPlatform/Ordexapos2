@@ -402,9 +402,25 @@ export const POSPage: React.FC = () => {
       {/* Top POS Control Bar */}
       <header className="flex flex-wrap items-center justify-between px-4 py-2.5 bg-slate-900 text-white border-b border-slate-800 shrink-0 gap-2">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5 text-indigo-400" />
-            <h1 className="text-sm font-extrabold tracking-tight">نقطة البيع (Ordexa POS)</h1>
+          <div className="flex items-center gap-2.5">
+            {client?.logo ? (
+              <img
+                src={client.logo}
+                alt={client.business_name}
+                className="h-8 w-8 rounded-lg object-contain bg-white p-0.5 border border-slate-700 shrink-0"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <ShoppingCart className="w-5 h-5 text-indigo-400" />
+            )}
+            <div className="flex flex-col">
+              <h1 className="text-sm font-extrabold tracking-tight text-white leading-tight">
+                {client?.business_name || 'نقطة البيع'}
+              </h1>
+              <span className="text-[10px] text-slate-400 font-medium">
+                {client?.customer_name ? `${client.customer_name} • Ordexa POS` : 'Ordexa POS Engine'}
+              </span>
+            </div>
           </div>
 
           <div className="h-4 w-px bg-slate-700 hidden sm:block" />

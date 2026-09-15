@@ -36,6 +36,7 @@ export function CustomerDeliveryModal({
   const [copiedAll, setCopiedAll] = useState(false);
 
   const { client, license, owner, downloads, previewUrl } = summary;
+  const webPosUrl = `${window.location.origin}/pos/${client.client_code}`;
 
   const handleCopy = (text: string, type: 'key' | 'link' | 'all') => {
     navigator.clipboard.writeText(text);
@@ -61,6 +62,10 @@ export function CustomerDeliveryModal({
 الهاتف: ${client.phone}
 العملة: ${client.currency}
 
+[رابط كاشير الويب وتطبيق الـ PWA للعمل أوفلاين (الأساسي الموصى به)]
+${webPosUrl}
+(يمكن تشغيله مباشرة من أي متصفح أو تثبيته كبرنامج مستقل على أجهزة الكاشير والتابلت ليعمل بدون إنترنت)
+
 [بيانات الترخيص والأجهزة]
 نوع الترخيص: ${license?.license_type || 'غير محدد'}
 مفتاح الترخيص: ${license?.license_key || 'لم يتم الإصدار'}
@@ -75,18 +80,17 @@ export function CustomerDeliveryModal({
 [رابط المعاينة الحية للواجهة (Web Preview)]
 ${window.location.origin}${previewUrl}
 
-[روابط التثبيت والتشغيل المباشر للكمبيوتر]
+[حزم التثبيت المكتبي لويندوز (اختياري)]
 رابط النسخة المحمولة (Portable ZIP):
 ${window.location.origin}${downloads.portableZip.url}
 
 رابط مثبت ويندوز (Windows Setup):
 ${window.location.origin}${downloads.installerExe.url}
 
-[تعليمات التفعيل السريع]
-1. يمكنك إرسال رابط المعاينة الحية أعلاه للعميل لمعاينة الكاشير والأصناف مباشرة من أي متصفح.
-2. قم بفك ضغط ملف النسخة المحمولة أو تثبيت ملف Setup على جهاز الكاشير.
-3. افتح تطبيق Ordexa POS Desktop وسجل الدخول بحساب المالك.
-4. أدخل مفتاح الترخيص أعلاه عند المطالبة لتسجيل الجهاز وبدء البيع.
+[خطوات التشغيل والتفعيل]
+1. أرسل للعميل رابط الكاشير الأساسي أعلاه (${webPosUrl}).
+2. يمكن للمستخدم الضغط على زر "تحميل برنامج الكاشير للعمل أوفلاين" لتثبيته كبرنامج دائم على جهازه.
+3. يدخل الكاشير بحسابه ويبدأ إصدار الفواتير مع المزامنة التلقائية.
 =========================================
 `.trim();
 
@@ -102,7 +106,7 @@ ${window.location.origin}${downloads.installerExe.url}
             <div>
               <h4 className="text-sm font-bold text-emerald-900">العميل جاهز للتسليم والتشغيل (Ready For Delivery)</h4>
               <p className="text-xs text-emerald-700 mt-0.5">
-                تم التحقق من بيانات الهوية، الرخص، وحزم التنزيل المكتبي المعتمدة.
+                تم التحقق من بيانات الهوية، الرخص، ونظام Web POS + PWA للعمل أوفلاين.
               </p>
             </div>
           </div>
@@ -114,6 +118,44 @@ ${window.location.origin}${downloads.installerExe.url}
             {copiedAll ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
             <span>{copiedAll ? 'تم نسخ التقرير الشامل' : 'نسخ ملف التسليم بالكامل'}</span>
           </button>
+        </div>
+
+        {/* Primary Route: Web POS + Installable PWA */}
+        <div className="bg-gradient-to-r from-indigo-900 to-slate-900 text-white rounded-xl p-4 sm:p-5 border border-indigo-500/30 shadow-md">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 text-xs font-semibold">
+                <span>المسار الأساسي الموصى به</span>
+                <span>•</span>
+                <span>Web POS + Installable PWA</span>
+              </div>
+              <h5 className="font-bold text-sm sm:text-base text-white">
+                رابط نقطة البيع المباشرة لكاشير {client.business_name}
+              </h5>
+              <p className="text-xs text-slate-300 font-mono select-all break-all">
+                {webPosUrl}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleCopy(webPosUrl, 'link')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium border border-white/20 transition-all"
+              >
+                {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{copiedLink ? 'تم النسخ' : 'نسخ الرابط'}</span>
+              </button>
+              <a
+                href={webPosUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                <span>فتح كاشير العميل</span>
+              </a>
+            </div>
+          </div>
         </div>
 
         {/* 4-Box Summary Grid */}

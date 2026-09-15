@@ -69,12 +69,23 @@ function generateHardwareFingerprint() {
 }
 
 function createWindow() {
+  // Resolve icon path with fallback: custom/public icon -> build icon -> none
+  const candidateIconPaths = [
+    path.join(__dirname, '..', 'public', 'assets', 'ordexa-icon.png'),
+    path.join(process.resourcesPath || '', 'public', 'assets', 'ordexa-icon.png'),
+    path.join(__dirname, '..', 'build', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'build', 'icon.ico')
+  ];
+
+  let resolvedIcon = candidateIconPaths.find(p => fs.existsSync(p));
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 1024,
     minHeight: 640,
     title: 'Ordexa POS Desktop',
+    ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

@@ -56,18 +56,31 @@ export function ClientDashboard() {
       {/* 1. Welcome Card */}
       <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 mb-1">
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>مرحباً بك في نظام إدارة نقطة البيع</span>
+          <div className="flex items-center gap-4">
+            <div className="h-16 w-16 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
+              {client?.logo ? (
+                <img
+                  src={client.logo}
+                  alt={client.business_name || 'شعار المنشأة'}
+                  className="h-full w-full object-contain p-1.5"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <Building2 className="h-8 w-8 text-indigo-600" />
+              )}
             </div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              أهلاً بك، {clientUser?.name || 'مستخدم النظام'}
-            </h1>
-            <p className="text-sm text-slate-600">
-              أنت متصل حالياً بنظام نقطة البيع الخاص بـ{' '}
-              <span className="font-bold text-slate-900">{client?.business_name || 'المنشأة'}</span>.
-            </p>
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                <Sparkles className="h-3 w-3" />
+                <span>نظام إدارة نقطة البيع للمنشأة</span>
+              </div>
+              <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+                {client?.business_name || 'لوحة تحكم المنشأة'}
+              </h1>
+              <p className="text-xs text-slate-600">
+                أهلاً بك، <span className="font-semibold text-slate-800">{clientUser?.name || 'مستخدم النظام'}</span> | كود المنشأة: <span className="font-mono font-bold text-slate-900">{client?.client_code}</span>
+              </p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 self-start md:self-auto">

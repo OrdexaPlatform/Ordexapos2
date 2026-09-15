@@ -1,6 +1,6 @@
 {
   "name": "Ordexa POS",
-  "description": "Ordexa POS - Super Admin Control Center & License Management System",
+  "description": "Ordexa POS - نظام الكاشير ونقاط البيع السحابي والأوفلاين وإدارة التراخيص",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

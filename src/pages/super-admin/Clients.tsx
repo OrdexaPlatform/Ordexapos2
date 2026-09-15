@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { logActivity } from '../../lib/activityLogger';
 import { Modal } from '../../components/ui/Modal';
 import { ClientForm } from './ClientForm';
-import { Search, Loader2, MoreVertical, Edit2, ShieldAlert, CheckCircle, Ban, Eye } from 'lucide-react';
+import { Search, Loader2, MoreVertical, Edit2, ShieldAlert, CheckCircle, Ban, Eye, Store } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
@@ -194,6 +194,16 @@ export function Clients() {
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-left text-sm font-medium">
                       <div className="flex items-center justify-end gap-3">
+                        <a
+                          href={`/pos/${client.client_code}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-indigo-600 hover:text-indigo-900 transition-colors"
+                          title="فتح نقطة بيع العميل (Web POS / PWA)"
+                        >
+                          <Store className="h-4 w-4" />
+                        </a>
+
                         <Link
                           to={`/super-admin/clients/${client.id}`}
                           className="text-slate-400 hover:text-slate-900 transition-colors"

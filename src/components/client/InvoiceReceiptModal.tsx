@@ -175,6 +175,16 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
           >
             {/* Store Header */}
             <div className="text-center pb-4 border-b border-dashed border-slate-300">
+              {client?.logo && (
+                <div className="flex justify-center mb-2">
+                  <img
+                    src={client.logo}
+                    alt={client.business_name || 'شعار المنشأة'}
+                    className="h-12 w-auto max-w-[140px] object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              )}
               <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
                 {client?.business_name || 'Ordexa POS Store'}
               </h2>

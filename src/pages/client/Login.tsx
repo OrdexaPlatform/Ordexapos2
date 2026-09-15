@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Navigate, Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
+import { useClientStore } from '../../store/clientStore';
 import { loginWithCredentials } from '../../lib/authService';
 import { Loader2, Eye, EyeOff, Store, ShieldCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -8,6 +9,7 @@ import toast from 'react-hot-toast';
 export function ClientLogin() {
   const navigate = useNavigate();
   const { user, userType, isSuperAdmin, initialized, determineUserRole } = useAuthStore();
+  const { client } = useClientStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -76,15 +78,26 @@ export function ClientLogin() {
     <div className="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8" dir="rtl">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center">
-          <div className="h-16 w-16 bg-slate-900 rounded-2xl flex items-center justify-center shadow-lg text-white">
-            <Store className="h-8 w-8 text-indigo-400" />
+          <div className="h-16 w-16 bg-slate-900 rounded-2xl flex items-center justify-center shadow-lg text-white overflow-hidden p-1">
+            {client?.logo ? (
+              <img
+                src={client.logo}
+                alt={client.business_name || 'شعار المنشأة'}
+                className="h-full w-full object-contain"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <Store className="h-8 w-8 text-indigo-400" />
+            )}
           </div>
         </div>
         <h2 className="mt-5 text-center text-2xl font-bold tracking-tight text-slate-900">
-          تسجيل الدخول لنقطة البيع
+          {client?.business_name ? `تسجيل الدخول - ${client.business_name}` : 'تسجيل الدخول لنقطة البيع'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-600">
-          نظام Ordexa POS لإدارة المنشآت ونقاط البيع
+          {client?.business_name
+            ? `نظام إدارة نقطة البيع للمنشأة (${client.client_code})`
+            : 'نظام Ordexa POS لإدارة المنشآت ونقاط البيع'}
         </p>
       </div>
 

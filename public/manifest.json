@@ -1,0 +1,25 @@
+{
+  "name": "Ordexa POS - نظام الكاشير السحابي والأوفلاين",
+  "short_name": "Ordexa POS",
+  "description": "نظام نقاط البيع وإدارة الفواتير السحابي والعمل بدون إنترنت",
+  "start_url": "/login",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/assets/ordexa-icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/ordexa-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

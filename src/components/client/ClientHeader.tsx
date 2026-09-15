@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
 import { useDeviceStore } from '../../store/deviceStore';
+import { InstallPwaButton } from '../pwa/InstallPwaButton';
 import { LogOut, MonitorCheck, Shield, User, Building, Download, Monitor, Menu } from 'lucide-react';
 import { ClientUserRole } from '../../types';
 
@@ -51,24 +52,42 @@ export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
             <Menu className="h-6 w-6" />
           </button>
 
-          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm sm:text-base">
-            <Building className="h-5 w-5 text-indigo-600 shrink-0" />
+          <div className="flex items-center gap-2.5 text-slate-800 font-bold text-sm sm:text-base">
+            {client?.logo ? (
+              <div className="h-8 w-8 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
+                <img
+                  src={client.logo}
+                  alt={client.business_name || 'شعار المنشأة'}
+                  className="h-full w-full object-contain p-0.5"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            ) : (
+              <Building className="h-5 w-5 text-indigo-600 shrink-0" />
+            )}
             <span className="truncate max-w-[160px] sm:max-w-xs">{client?.business_name || 'نظام إدارة نقاط البيع'}</span>
           </div>
         </div>
 
 
         {/* Center/Right Status Badges & User Profile */}
-        <div className="flex items-center gap-3 sm:gap-4">
-          {/* Desktop App Download Button */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* PWA Install Button for Offline Web POS */}
+          <InstallPwaButton
+            clientName={client?.business_name}
+            clientCode={client?.client_code}
+            variant="header"
+          />
+
+          {/* Desktop App Download Button (Legacy / Secondary Option) */}
           <button
             type="button"
             onClick={() => setShowDownloadModal(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition-colors shadow-sm"
-            title="تحميل برنامج سطح المكتب للكمبيوتر"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 transition-colors shadow-sm"
+            title="تحميل برنامج سطح المكتب للكمبيوتر (اختياري)"
           >
             <Download className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">تحميل نسخة الكمبيوتر</span>
+            <span>نسخة الكمبيوتر</span>
           </button>
 
           {/* Device Status Badge */}

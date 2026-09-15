@@ -33,8 +33,10 @@ import { StaffPage } from './pages/client/Staff';
 import { ProductsPage } from './pages/client/Products';
 import { InventoryPage } from './pages/client/Inventory';
 import { POSPage } from './pages/client/POS';
+import { ClientPosGatewayPage } from './pages/client/ClientPosGatewayPage';
 import { SalesPage } from './pages/client/Sales';
 import { ShiftsPage } from './pages/client/Shifts';
+import { ClientSettings } from './pages/client/Settings';
 import { ModulePlaceholder } from './pages/client/ModulePlaceholder';
 import { 
   ShoppingCart, 
@@ -73,6 +75,11 @@ function RootRedirect() {
     }
   }
 
+  const lastClientCode = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_last_client_code') : null;
+  if (lastClientCode) {
+    return <Navigate to={`/pos/${lastClientCode}`} replace />;
+  }
+
   return <Navigate to="/login" replace />;
 }
 
@@ -90,6 +97,10 @@ export default function App() {
         {/* Dynamic Root Redirection */}
         <Route path="/" element={<RootRedirect />} />
         
+        {/* Dedicated Web POS & PWA Route for Clients (Accessible directly via /pos/:clientCode) */}
+        <Route path="/pos/:clientCode" element={<ClientPosGatewayPage />} />
+        <Route path="/pos/:clientCode/*" element={<ClientPosGatewayPage />} />
+
         {/* Authentication Routes */}
         <Route path="/login" element={<ClientLogin />} />
         <Route path="/super-admin/login" element={<Login />} />
@@ -252,11 +263,7 @@ export default function App() {
               path="/settings" 
               element={
                 <ModuleRouteGuard module="settings">
-                  <ModulePlaceholder 
-                    title="إعدادات المنشأة ونقطة البيع" 
-                    description="تخصيص الفواتير، بيانات المنشأة، الطابعات، وإعدادات الشبكة."
-                    icon={SettingsIcon}
-                  />
+                  <ClientSettings />
                 </ModuleRouteGuard>
               } 
             />

@@ -1,7 +1,8 @@
 import React from 'react';
+import { useLocation, Link } from 'react-router-dom';
 import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
-import { ShieldAlert, AlertTriangle, XCircle, Clock, LogOut, RefreshCw } from 'lucide-react';
+import { ShieldAlert, AlertTriangle, XCircle, Clock, LogOut, RefreshCw, Layers } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface LicenseGuardProps {
@@ -9,6 +10,7 @@ interface LicenseGuardProps {
 }
 
 export function LicenseGuard({ children }: LicenseGuardProps) {
+  const location = useLocation();
   const { client, license, effectiveLicenseStatus, loading, loadClient } = useClientStore();
   const { signOut, isSuperAdmin } = useAuthStore();
   const [reloading, setReloading] = React.useState(false);
@@ -39,6 +41,11 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
 
   // Active license - allow through
   if (effectiveLicenseStatus === 'active') {
+    return <>{children}</>;
+  }
+
+  // License Exception: Users can always navigate to /shifts to close their current shift if one was open
+  if (location.pathname.startsWith('/shifts')) {
     return <>{children}</>;
   }
 
@@ -114,24 +121,34 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
             )}
           </div>
 
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={reloading}
-              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white font-medium text-sm hover:bg-slate-800 transition-colors disabled:opacity-50"
+          <div className="flex flex-col gap-2 pt-2">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={reloading}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white font-medium text-sm hover:bg-slate-800 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />
+                <span>إعادة التحقق من الترخيص</span>
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-medium text-sm hover:bg-slate-50 transition-colors"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>خروج</span>
+              </button>
+            </div>
+
+            <Link
+              to="/shifts"
+              className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 font-medium text-xs hover:bg-amber-100 transition-colors"
             >
-              <RefreshCw className={`h-4 w-4 ${reloading ? 'animate-spin' : ''}`} />
-              <span>إعادة التحقق من الترخيص</span>
-            </button>
-            <button
-              type="button"
-              onClick={signOut}
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-medium text-sm hover:bg-slate-50 transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-              <span>خروج</span>
-            </button>
+              <Layers className="h-3.5 w-3.5" />
+              <span>الانتقال لشاشة الورديات لإغلاق الوردية الحالية (Close Active Shift)</span>
+            </Link>
           </div>
         </div>
       </div>

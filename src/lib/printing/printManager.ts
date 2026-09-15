@@ -74,6 +74,7 @@ export class POSPrintManager {
       <body>
         <div class="container">
           <div class="text-center">
+            ${client?.logo ? `<div style="margin-bottom: 6px;"><img src="${client.logo}" style="max-height: 48px; max-width: 140px; object-fit: contain;" /></div>` : ''}
             <h2 style="margin: 0 0 4px 0; font-size: ${is58 ? '14px' : '17px'};">${storeName}</h2>
             ${vatNumber ? `<div>${vatNumber}</div>` : ''}
             ${phone ? `<div>${phone}</div>` : ''}

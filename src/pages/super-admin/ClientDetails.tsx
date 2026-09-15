@@ -40,10 +40,15 @@ import {
   User,
   Sparkles,
   Eye,
-  Laptop
+  Laptop,
+  Check,
+  Copy,
+  Store
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { ImageUploadPicker } from '../../components/common/ImageUploadPicker';
+import { useClientStore } from '../../store/clientStore';
 
 export function ClientDetails() {
   const { id } = useParams<{ id: string }>();
@@ -58,6 +63,7 @@ export function ClientDetails() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedWebPosLink, setCopiedWebPosLink] = useState(false);
 
   // Modals
   const [isEditClientModalOpen, setIsEditClientModalOpen] = useState(false);
@@ -226,6 +232,95 @@ export function ClientDetails() {
     }
   };
 
+  // Client Branding / Logo Handlers
+  const [isUpdatingLogo, setIsUpdatingLogo] = useState<boolean>(false);
+
+  const handleLogoUpdate = async (dataUrl: string) => {
+    if (!id || !client) return;
+    setIsUpdatingLogo(true);
+    const toastId = toast.loading('جاري حفظ وتحديث شعار العميل...');
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .update({
+          logo: dataUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setClient({ ...client, logo: dataUrl });
+
+      // Sync active client store if matching
+      const currentActiveClient = useClientStore.getState().client;
+      if (currentActiveClient && currentActiveClient.id === id) {
+        useClientStore.setState({
+          client: { ...currentActiveClient, logo: dataUrl },
+        });
+      }
+
+      await logActivity({
+        action: 'update_client_logo',
+        entityType: 'client',
+        entityId: id,
+        metadata: { client_id: id, client_code: client.client_code },
+      });
+
+      toast.success('تم تحديث شعار العميل وربطه بنجاح', { id: toastId });
+    } catch (err: any) {
+      console.error('Error updating client logo:', err);
+      toast.error(err.message || 'فشل في تحديث شعار العميل', { id: toastId });
+    } finally {
+      setIsUpdatingLogo(false);
+    }
+  };
+
+  const handleLogoRemove = async () => {
+    if (!id || !client) return;
+    if (!window.confirm('هل أنت متأكد من رغبتك في حذف شعار العميل والعودة للشعار الافتراضي؟')) {
+      return;
+    }
+
+    setIsUpdatingLogo(true);
+    const toastId = toast.loading('جاري حذف شعار العميل...');
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .update({
+          logo: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setClient({ ...client, logo: null });
+
+      // Sync active client store if matching
+      const currentActiveClient = useClientStore.getState().client;
+      if (currentActiveClient && currentActiveClient.id === id) {
+        useClientStore.setState({
+          client: { ...currentActiveClient, logo: null },
+        });
+      }
+
+      await logActivity({
+        action: 'remove_client_logo',
+        entityType: 'client',
+        entityId: id,
+        metadata: { client_id: id, client_code: client.client_code },
+      });
+
+      toast.success('تم حذف شعار العميل والعودة للافتراضي', { id: toastId });
+    } catch (err: any) {
+      console.error('Error removing client logo:', err);
+      toast.error(err.message || 'فشل في حذف شعار العميل', { id: toastId });
+    } finally {
+      setIsUpdatingLogo(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-[450px] flex flex-col items-center justify-center bg-white rounded-xl shadow-sm border border-slate-200">
@@ -272,7 +367,7 @@ export function ClientDetails() {
   };
 
   const previewToken = generatePreviewToken(client.id, client.client_code);
-  const previewUrl = `/super-admin/clients/${client.id}/preview?token=${previewToken}`;
+  const previewUrl = `/preview/${client.id}?token=${previewToken}`;
 
   const deliverySummary: CustomerDeliverySummaryData = {
     client,
@@ -340,6 +435,17 @@ export function ClientDetails() {
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-3">
+            <a
+              href={`/pos/${client.client_code}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 shadow-sm transition-colors"
+              title="فتح نظام الكاشير السحابي والـ PWA المخصص للعميل"
+            >
+              <Store className="h-4 w-4" />
+              <span>نقطة بيع العميل (Web POS)</span>
+            </a>
+
             <Link
               to={previewUrl}
               target="_blank"
@@ -348,7 +454,7 @@ export function ClientDetails() {
               title="فتح شاشة المعاينة الحية للعميل في نافذة جديدة"
             >
               <Eye className="h-4 w-4" />
-              <span>معاينة واجهة العميل (Live Client Preview)</span>
+              <span>معاينة واجهة العميل (Live Preview)</span>
             </Link>
 
             <button
@@ -379,6 +485,50 @@ export function ClientDetails() {
         </div>
       </div>
 
+      {/* Web POS + PWA Dedicated Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-xl p-5 border border-indigo-500/30 text-white shadow-md">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-semibold">
+              <Store className="h-3.5 w-3.5" />
+              <span>المسار الأساسي المعتمد للعميل: Web POS + Installable PWA</span>
+            </div>
+            <h3 className="text-base font-bold text-white">
+              رابط كاشير منشأة {client.business_name}
+            </h3>
+            <p className="text-xs text-slate-300 font-mono select-all">
+              {window.location.origin}/pos/{client.client_code}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(`${window.location.origin}/pos/${client.client_code}`);
+                setCopiedWebPosLink(true);
+                setTimeout(() => setCopiedWebPosLink(false), 2000);
+                toast.success('تم نسخ رابط كاشير المنشأة إلى الحافظة');
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-semibold border border-white/20 transition-all"
+            >
+              {copiedWebPosLink ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+              <span>{copiedWebPosLink ? 'تم النسخ' : 'نسخ الرابط'}</span>
+            </button>
+
+            <a
+              href={`/pos/${client.client_code}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
+            >
+              <ExternalLink className="h-4 w-4" />
+              <span>فتح نقطة البيع</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
       {/* Delivery Checklist Progress Card */}
       <DeliveryChecklistCard
         status={deliveryStatus}
@@ -387,6 +537,47 @@ export function ClientDetails() {
         onOpenPreview={() => window.open(previewUrl, '_blank')}
         onOpenDeliverySummary={() => setIsDeliveryModalOpen(true)}
       />
+
+      {/* SECTION: Client Branding (هوية العميل) */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+              <Building2 className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">
+                هوية العميل (Client Branding)
+              </h2>
+              <p className="text-xs text-slate-500">
+                إدارة شعار المنشأة الخاص بالعميل {client.business_name} (مرتبط بـ Client ID: {client.id}).
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+              <span>كود المنشأة:</span>
+              <span className="font-mono text-indigo-600 font-bold">{client.client_code}</span>
+            </span>
+          </div>
+        </div>
+
+        <ImageUploadPicker
+          label="شعار العميل"
+          description="ارفع شعار المنشأة مباشرة من جهازك دون إدخال أي روابط URL."
+          value={client.logo}
+          isCustom={!!client.logo}
+          onChange={handleLogoUpdate}
+          onRemove={client.logo ? handleLogoRemove : undefined}
+          disabled={isUpdatingLogo}
+          aspectRatio="square"
+          maxWidth={512}
+          maxHeight={512}
+          badgeText="خاص بهذا العميل"
+          helperNote="الصيغ المدعومة: PNG, JPG, WEBP, SVG (حتى 5MB). يظهر هذا الشعار ديناميكياً داخل شاشات نقطة البيع (POS)، الفواتير الحرارية، ولوحة تحكم المنشأة."
+        />
+      </div>
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

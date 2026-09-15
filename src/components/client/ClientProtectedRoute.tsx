@@ -33,8 +33,12 @@ export function ClientProtectedRoute() {
     );
   }
 
-  // Not logged in -> redirect to Client login
+  // Not logged in -> redirect to Client POS if last client is remembered, or generic login
   if (!user) {
+    const lastCode = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_last_client_code') : null;
+    if (lastCode) {
+      return <Navigate to={`/pos/${lastCode}`} state={{ from: location }} replace />;
+    }
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

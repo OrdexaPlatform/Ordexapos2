@@ -121,10 +121,14 @@ export async function provisionUserViaApi(
   input: ProvisionUserInput
 ): Promise<{ user: ClientUser; isAuthLinked: boolean; message: string }> {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
     const response = await fetch('/api/auth/provision-user', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(input),
     });
@@ -150,10 +154,14 @@ export async function provisionUserViaApi(
  */
 export async function syncClientOwnerViaApi(clientId: string): Promise<any> {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+
     const response = await fetch('/api/auth/sync-client-owner', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ client_id: clientId }),
     });

@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { supabase } from '../../lib/supabase';
 import { logActivity } from '../../lib/activityLogger';
 import toast from 'react-hot-toast';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Building2 } from 'lucide-react';
+import { ImageUploadPicker } from '../../components/common/ImageUploadPicker';
 
 const clientSchema = z.object({
   customer_name: z.string().min(2, 'الاسم يجب أن يكون حرفين على الأقل'),
@@ -36,6 +37,7 @@ const generateClientCode = () => {
 export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps) {
   const isEditing = !!initialData;
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [clientLogo, setClientLogo] = React.useState<string | null>(initialData?.logo || null);
 
   const {
     register,
@@ -63,6 +65,7 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           .from('clients')
           .update({
             ...data,
+            logo: clientLogo || null,
             // Only send empty strings as null for optional fields if strict db requires, but empty string should be fine.
             email: data.email || null,
           })
@@ -74,7 +77,7 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           action: 'update_client',
           entityType: 'client',
           entityId: initialData.id,
-          metadata: { changes: data },
+          metadata: { changes: { ...data, has_logo: !!clientLogo } },
         });
       } else {
         const clientCode = generateClientCode();
@@ -83,6 +86,7 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           .insert({
             ...data,
             client_code: clientCode,
+            logo: clientLogo || null,
             email: data.email || null,
           })
           .select('id')
@@ -94,7 +98,7 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           action: 'create_client',
           entityType: 'client',
           entityId: newClient?.id,
-          metadata: { client_code: clientCode, ...data },
+          metadata: { client_code: clientCode, ...data, has_logo: !!clientLogo },
         });
       }
       onSuccess();
@@ -107,7 +111,35 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" dir="rtl">
+      {/* SECTION: Client Branding (هوية العميل) */}
+      <div className="bg-slate-50/70 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+        <div className="flex items-center gap-2 border-b border-slate-200/80 pb-3">
+          <Building2 className="h-5 w-5 text-indigo-600" />
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">هوية العميل (Client Branding)</h3>
+            <p className="text-xs text-slate-500">
+              شعار المنشأة يظهر داخل شاشات نقاط البيع، الفواتير، ولوحة التحكم الخاصة بالعميل.
+            </p>
+          </div>
+        </div>
+
+        <ImageUploadPicker
+          label="شعار العميل"
+          description="ارفع شعار المنشأة مباشرة من جهازك (لا حاجة لروابط خارجية)."
+          value={clientLogo}
+          isCustom={!!clientLogo}
+          onChange={(dataUrl) => setClientLogo(dataUrl)}
+          onRemove={() => setClientLogo(null)}
+          disabled={isSubmitting}
+          aspectRatio="square"
+          maxWidth={512}
+          maxHeight={512}
+          badgeText="خاص بهذا العميل"
+          helperNote="الصيغ المدعومة: PNG, JPG, WEBP, SVG (حتى 5MB). يتم الحفظ والربط مع المنشأة مباشرة."
+        />
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <label className="block text-sm font-medium leading-6 text-slate-900">
