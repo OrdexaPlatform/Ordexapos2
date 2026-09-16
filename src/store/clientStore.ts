@@ -56,42 +56,50 @@ export const useClientStore = create<ClientState>((set, get) => ({
 
     try {
       // 1. Try public API first (fast & secure server-side isolation)
-      const res = await fetch(`/api/client/public-pos-config/${encodeURIComponent(normalizedCode)}`);
-      
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.client) {
-          const clientData = json.client as Client;
-          
-          // Scoped caching for offline use
-          try {
-            localStorage.setItem(`ordexa_cached_client_${clientData.id}`, JSON.stringify(clientData));
-            localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(clientData));
-            localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
-          } catch {
-            // Storage quota full or restricted
+      try {
+        const res = await fetch(`/api/client/public-pos-config/${encodeURIComponent(normalizedCode)}`);
+        
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          const json = await res.json().catch(() => null);
+          if (json && json.success && json.client) {
+            const clientData = json.client as Client;
+            
+            // Scoped caching for offline use
+            try {
+              localStorage.setItem(`ordexa_cached_client_${clientData.id}`, JSON.stringify(clientData));
+              localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(clientData));
+              localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
+            } catch {
+              // Storage quota full or restricted
+            }
+
+            // Update dynamic PWA manifest and window title
+            updateDynamicManifestLink(clientData.client_code, clientData.business_name);
+
+            set({
+              client: clientData,
+              effectiveLicenseStatus: json.client.has_active_license ? 'active' : (json.client.license_status || 'unknown'),
+              loading: false,
+              error: null,
+            });
+
+            return clientData;
           }
-
-          // Update dynamic PWA manifest and window title
-          updateDynamicManifestLink(clientData.client_code, clientData.business_name);
-
-          set({
-            client: clientData,
-            effectiveLicenseStatus: json.client.has_active_license ? 'active' : (json.client.license_status || 'unknown'),
-            loading: false,
-            error: null,
-          });
-
-          return clientData;
+        } else if (res.status === 404) {
+          throw new Error(`لم يتم العثور على منشأة بالرمز (${normalizedCode})`);
+        } else if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.error || 'حساب هذه المنشأة غير نشط أو موقوف مؤقتاً');
         }
-      } else if (res.status === 404) {
-        throw new Error(`لم يتم العثور على منشأة بالرمز (${normalizedCode})`);
-      } else if (res.status === 403) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || 'حساب هذه المنشأة غير نشط أو موقوف مؤقتاً');
+      } catch (fetchErr: any) {
+        // If 403 or 404 with specific message, propagate
+        if (fetchErr.message?.includes('غير نشط') || fetchErr.message?.includes('لم يتم العثور')) {
+          throw fetchErr;
+        }
+        console.warn('API endpoint did not return valid JSON config, proceeding to direct Supabase query:', fetchErr);
       }
 
-      // 2. Direct Supabase fallback if API route did not respond 200
+      // 2. Direct Supabase fallback if API route did not respond with JSON
       const { data: dbClient, error: dbErr } = await supabase
         .from('clients')
         .select('*')
@@ -154,10 +162,50 @@ export const useClientStore = create<ClientState>((set, get) => ({
     set({ loading: true, error: null });
 
     try {
+      // 1. Try secure backend server route first (guaranteed isolation & reliable auth)
+      const sessionRes = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      const token = sessionRes.data?.session?.access_token;
+      if (token) {
+        try {
+          const apiRes = await fetch(`/api/client-by-id/${clientId}`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          if (apiRes.ok) {
+            const json = await apiRes.json();
+            if (json.success && json.client) {
+              const clientData = json.client as Client;
+              const licenseData = json.license as License | null;
+              const effectiveStatus = json.effectiveLicenseStatus || (licenseData ? getEffectiveLicenseStatus(licenseData.status, licenseData.expiry_date) : 'no_license');
+
+              try {
+                localStorage.setItem(`ordexa_cached_client_${clientId}`, JSON.stringify(clientData));
+                if (clientData.client_code) {
+                  localStorage.setItem(`ordexa_cached_client_by_code_${clientData.client_code.toUpperCase()}`, JSON.stringify(clientData));
+                  localStorage.setItem('ordexa_last_client_code', clientData.client_code.toUpperCase());
+                }
+              } catch {}
+
+              set({
+                client: clientData,
+                license: licenseData,
+                effectiveLicenseStatus: effectiveStatus,
+                loading: false,
+                error: null,
+              });
+              return;
+            }
+          }
+        } catch (apiErr) {
+          console.warn('Backend client-by-id API failed, falling back to direct DB:', apiErr);
+        }
+      }
+
       // Check offline cached license first if available
       const cachedLicenseRecord = await offlineStorage.getCachedLicense(clientId).catch(() => null);
 
-      // 1. Fetch Client profile
+      // 2. Fetch Client profile
       const { data: clientData, error: clientErr } = await supabase
         .from('clients')
         .select('*')

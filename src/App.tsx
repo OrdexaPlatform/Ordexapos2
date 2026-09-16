@@ -37,7 +37,12 @@ import { ClientPosGatewayPage } from './pages/client/ClientPosGatewayPage';
 import { SalesPage } from './pages/client/Sales';
 import { ShiftsPage } from './pages/client/Shifts';
 import { ClientSettings } from './pages/client/Settings';
-import { ModulePlaceholder } from './pages/client/ModulePlaceholder';
+import { PurchasesPage } from './pages/client/Purchases';
+import { CustomersPage } from './pages/client/Customers';
+import { SuppliersPage } from './pages/client/Suppliers';
+import { ExpensesPage } from './pages/client/Expenses';
+import { TreasuryPage } from './pages/client/Treasury';
+import { ReportsPage } from './pages/client/Reports';
 import { 
   ShoppingCart, 
   Receipt, 
@@ -175,11 +180,7 @@ export default function App() {
               path="/purchases" 
               element={
                 <ModuleRouteGuard module="purchases">
-                  <ModulePlaceholder 
-                    title="إدارة المشتريات والتوريدات" 
-                    description="أوامر الشراء، فواتير الموردين، وإدخال الشحنات للمستودعات."
-                    icon={Truck}
-                  />
+                  <PurchasesPage />
                 </ModuleRouteGuard>
               } 
             />
@@ -187,11 +188,7 @@ export default function App() {
               path="/customers" 
               element={
                 <ModuleRouteGuard module="customers">
-                  <ModulePlaceholder 
-                    title="سجل العملاء والحسابات" 
-                    description="إدارة بيانات العملاء، ديون العملاء، نقاط الولاء، وكشوف الحساب."
-                    icon={Users}
-                  />
+                  <CustomersPage />
                 </ModuleRouteGuard>
               } 
             />
@@ -199,11 +196,7 @@ export default function App() {
               path="/suppliers" 
               element={
                 <ModuleRouteGuard module="suppliers">
-                  <ModulePlaceholder 
-                    title="سجل الموردين" 
-                    description="إدارة بيانات الموردين، الأرصدة المستحقة، والدفعات الآجلة."
-                    icon={Building2}
-                  />
+                  <SuppliersPage />
                 </ModuleRouteGuard>
               } 
             />
@@ -211,11 +204,7 @@ export default function App() {
               path="/expenses" 
               element={
                 <ModuleRouteGuard module="expenses">
-                  <ModulePlaceholder 
-                    title="إدارة المصروفات التشغيلية" 
-                    description="تسجيل بنود المصروفات، النثريات، والمدفوعات التشغيلية للمنشأة."
-                    icon={Wallet}
-                  />
+                  <ExpensesPage />
                 </ModuleRouteGuard>
               } 
             />
@@ -223,11 +212,7 @@ export default function App() {
               path="/treasury" 
               element={
                 <ModuleRouteGuard module="treasury">
-                  <ModulePlaceholder 
-                    title="إدارة الخزنة والحسابات النقدية" 
-                    description="متابعة أرصدة الخزينة، البنوك، التحويلات الداخلية، والمقبوضات."
-                    icon={Vault}
-                  />
+                  <TreasuryPage />
                 </ModuleRouteGuard>
               } 
             />
@@ -243,11 +228,7 @@ export default function App() {
               path="/reports" 
               element={
                 <ModuleRouteGuard module="reports">
-                  <ModulePlaceholder 
-                    title="التقارير المالية والتحليلات" 
-                    description="تقارير الأرباح والمبيعات، حركة الأصناف، وتقارير الإقرارات الضريبية."
-                    icon={BarChart3}
-                  />
+                  <ReportsPage />
                 </ModuleRouteGuard>
               } 
             />

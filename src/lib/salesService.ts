@@ -108,7 +108,35 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
     throw new Error('يرجى اختيار وسيلة دفع واحدة على الأقل');
   }
 
-  // 1. Try calling the atomic RPC function
+  // 1. First priority: Try secure atomic server endpoint
+  try {
+    const res = await fetch('/api/sales/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.sale_id) {
+        await logActivity({
+          action: 'sale_created',
+          entityType: 'sale',
+          entityId: json.sale_id,
+          metadata: {
+            invoice_number: json.invoice_number,
+            total_amount: json.total_amount,
+            items_count: items.length,
+          },
+        }).catch(() => {});
+
+        return json as CompleteSaleResult;
+      }
+    }
+  } catch (apiErr) {
+    // Network or server error, continue to RPC/fallback
+  }
+
+  // 2. Second priority: Try calling atomic Supabase RPC
   let { data: rpcData, error: rpcError } = await supabase.rpc('complete_sale', {
     p_client_id: clientId,
     p_warehouse_id: warehouseId,
@@ -148,26 +176,13 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
         total_amount: rpcData.total_amount,
         items_count: items.length
       }
-    });
+    }).catch(() => {});
 
     return rpcData as CompleteSaleResult;
   }
 
-  // If the RPC threw an intentional exception (permissions, price integrity, stock insufficiency, validation), throw it directly
-  const isFunctionNotFound = rpcError && (
-    rpcError.code === '42883' || 
-    rpcError.code === 'PGRST202' ||
-    rpcError.message?.toLowerCase().includes('could not find the function') ||
-    rpcError.message?.toLowerCase().includes('schema cache')
-  );
-
-  if (rpcError && !isFunctionNotFound) {
-    throw new Error(rpcError.message);
-  }
-
-  // If RPC is not deployed yet on Supabase (awaiting manual migration run), execute fallback transaction
-  console.warn('complete_sale RPC not found on database, falling back to direct client transaction:', rpcError?.message);
-
+  // 3. Third priority: Direct fallback client transaction
+  console.warn('Falling back to direct client transaction for checkout:', rpcError?.message);
   return await executeFallbackCompleteSale(payload);
 }
 

@@ -2,7 +2,7 @@ import React from 'react';
 import { useDeviceStore } from '../../store/deviceStore';
 import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
-import { MonitorX, RefreshCw, Copy, Check, ShieldAlert, LogOut } from 'lucide-react';
+import { MonitorX, RefreshCw, Copy, Check, ShieldAlert, LogOut, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface DeviceGuardProps {
@@ -10,11 +10,12 @@ interface DeviceGuardProps {
 }
 
 export function DeviceGuard({ children }: DeviceGuardProps) {
-  const { status, fingerprint, isActivated, errorMessage, initializeDevice } = useDeviceStore();
+  const { status, fingerprint, isActivated, errorMessage, initializeDevice, registerTerminal } = useDeviceStore();
   const { client, license, effectiveLicenseStatus } = useClientStore();
   const { signOut, isSuperAdmin } = useAuthStore();
   const [copied, setCopied] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [activating, setActivating] = React.useState(false);
 
   // Super Admin bypass: Super Admins are never blocked by Device Activation or Device Fingerprint
   if (isSuperAdmin) {
@@ -32,6 +33,24 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
     setRefreshing(true);
     await initializeDevice(client?.id, license?.id);
     setRefreshing(false);
+  };
+
+  const handleManualActivate = async () => {
+    if (!client?.id || !license?.license_key) {
+      toast.error('بيانات الترخيص أو المنشأة غير مكتملة');
+      return;
+    }
+    setActivating(true);
+    try {
+      const res = await registerTerminal(client.id, license.license_key);
+      if (res.success) {
+        toast.success('تم تسجيل وتفعيل الجهاز بنجاح!');
+      } else {
+        toast.error(res.message || 'تعذر تفعيل الجهاز');
+      }
+    } finally {
+      setActivating(false);
+    }
   };
 
   if (status === 'loading') {
@@ -125,33 +144,65 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
             </div>
           </div>
 
-          {/* Instructions message */}
+          {/* Instructions message or Quota Full Message */}
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5 leading-relaxed">
-            <p className="font-semibold text-slate-800">لتفعيل هذا الجهاز:</p>
-            <p>
-              يرجى تزويد مسؤول النظام (Super Admin / المشرف) بالبصمة الرقمية الموضحة أعلاه ليتم إضافة الجهاز ضمن قائمة الأجهزة المصرح لها في المنشأة.
-            </p>
+            {errorMessage?.includes('الحد الأقصى') ? (
+              <div className="space-y-1 text-rose-700 font-medium">
+                <p className="font-bold text-rose-800">تنبيه مقاعد الترخيص:</p>
+                <p>{errorMessage}</p>
+              </div>
+            ) : (
+              <>
+                <p className="font-semibold text-slate-800">لتفعيل هذا الجهاز:</p>
+                <p>
+                  يمكنك الضغط على زر التفعيل المباشر أدناه، أو تزويد مسؤول النظام بالبصمة الرقمية الموضحة أعلاه ليتم إضافة الجهاز ضمن قائمة الأجهزة المصرح لها في المنشأة.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={handleRetry}
-              disabled={refreshing}
-              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white font-medium text-sm hover:bg-slate-800 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-              <span>إعادة فحص التفعيل</span>
-            </button>
-            <button
-              type="button"
-              onClick={signOut}
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-medium text-sm hover:bg-slate-50 transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-              <span>تسجيل الخروج</span>
-            </button>
+          <div className="flex flex-col gap-2.5 pt-2">
+            {status === 'unregistered' && !errorMessage?.includes('الحد الأقصى') && license?.license_key && (
+              <button
+                type="button"
+                onClick={handleManualActivate}
+                disabled={activating}
+                className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm transition-all shadow-md shadow-emerald-600/20 disabled:opacity-50"
+              >
+                {activating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>جارٍ تفعيل وربط الجهاز...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>تفعيل هذا الجهاز لنقطة البيع الآن</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={refreshing}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white font-medium text-sm hover:bg-slate-800 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                <span>إعادة فحص التفعيل</span>
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg border border-slate-300 text-slate-700 font-medium text-sm hover:bg-slate-50 transition-colors"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>تسجيل الخروج</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

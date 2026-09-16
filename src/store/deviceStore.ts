@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseAnonQuery } from '../lib/supabase';
 import { Device, POSLicenseValidationResult } from '../types';
 import { validatePOSLicense, registerPOSTerminal, deactivatePOSTerminal } from '../lib/deviceService';
 import { offlineStorage } from '../lib/offline/offlineStorage';
@@ -269,7 +269,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       const validation = await get().validateLicense(clientId);
 
       // Query the devices table for this fingerprint
-      let query = supabase
+      let query = supabaseAnonQuery
         .from('devices')
         .select('*, client:clients(*), license:licenses(*)')
         .eq('device_fingerprint', currentFp);
@@ -312,6 +312,45 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           return;
         }
 
+        // Check if license is active and has available device slots
+        const val = validation || get().licenseValidation;
+        const maxDevs = val?.license?.max_devices ?? 1;
+        const actDevs = val?.license?.activated_devices ?? 0;
+        const licKey = val?.license?.license_key;
+        const effectiveClientId = clientId || val?.client?.id;
+
+        if (maxDevs && actDevs >= maxDevs) {
+          // Device quota fully utilized
+          set({
+            device: null,
+            status: 'unregistered',
+            isActivated: false,
+            errorMessage: `تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم (${maxDevs} جهاز). يرجى ترقية الخطة أو تعطيل جهاز آخر أولاً.`,
+          });
+          return;
+        }
+
+        // Available slot exists! Auto-register new browser/PWA device
+        if (effectiveClientId && licKey) {
+          const regRes = await get().registerTerminal(
+            effectiveClientId,
+            licKey,
+            get().deviceName || 'نقطة بيع - متصفح الويب'
+          );
+
+          if (regRes.success && get().device) {
+            return;
+          } else if (regRes.message && regRes.message.includes('الحد الأقصى')) {
+            set({
+              device: null,
+              status: 'unregistered',
+              isActivated: false,
+              errorMessage: regRes.message,
+            });
+            return;
+          }
+        }
+
         // Device not registered yet under this client/license
         set({
           device: null,
@@ -324,7 +363,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
 
       if (data.status === 'active') {
         // Update heartbeat last_seen_at silently
-        supabase
+        supabaseAnonQuery
           .from('devices')
           .update({ 
             last_seen_at: new Date().toISOString(),

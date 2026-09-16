@@ -162,7 +162,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // 2. Check if user is a Client User (either by auth_user_id or by email)
       try {
-        const { data: clientUserData, error: clientUserErr } = await supabase
+        const { data: clientUserData, error: clientUserErr } = await supabaseAnonQuery
           .from('client_users')
           .select('*')
           .or(`auth_user_id.eq.${user.id},email.eq.${normalizedEmail}`)
@@ -188,13 +188,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
           // Link auth_user_id if not yet linked
           if (!clientUserData.auth_user_id && user.id) {
-            await supabase
+            await supabaseAnonQuery
               .from('client_users')
               .update({ auth_user_id: user.id, last_login_at: now })
               .eq('id', clientUserData.id);
             clientUserData.auth_user_id = user.id;
           } else {
-            await supabase
+            await supabaseAnonQuery
               .from('client_users')
               .update({ last_login_at: now })
               .eq('id', clientUserData.id);

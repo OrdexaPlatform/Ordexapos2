@@ -88,12 +88,18 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           await offlineStorage.updatePendingSaleStatus(sale.local_transaction_id, 'syncing');
 
           // 1. Idempotency Check: Verify if sale was already synced
-          const { data: existingSale } = await supabase
-            .from('sales')
-            .select('id, invoice_number')
-            .eq('client_id', sale.client_id)
-            .eq('local_transaction_id', sale.local_transaction_id)
-            .maybeSingle();
+          let existingSale: { id: string; invoice_number: string } | null = null;
+          try {
+            const { data } = await supabase
+              .from('sales')
+              .select('id, invoice_number')
+              .eq('client_id', sale.client_id)
+              .ilike('notes', `%${sale.local_transaction_id}%`)
+              .maybeSingle();
+            existingSale = data;
+          } catch {
+            // fallback
+          }
 
           if (existingSale) {
             // Already synced, safely remove from local queue
@@ -126,14 +132,18 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           });
 
           if (result && result.success && result.sale_id) {
-            // Tag sale with local_transaction_id & is_offline_sync flag
-            await supabase
-              .from('sales')
-              .update({
-                local_transaction_id: sale.local_transaction_id,
-                is_offline_sync: true
-              })
-              .eq('id', result.sale_id);
+            // Safely tag sale with local_transaction_id
+            try {
+              await supabase
+                .from('sales')
+                .update({
+                  local_transaction_id: sale.local_transaction_id,
+                  is_offline_sync: true
+                })
+                .eq('id', result.sale_id);
+            } catch {
+              // Ignore schema column discrepancy if columns do not exist yet
+            }
 
             // Remove from offline IndexedDB queue
             await offlineStorage.removePendingSale(sale.local_transaction_id);

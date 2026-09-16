@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseAnonQuery } from './supabase';
 import { logActivity } from './activityLogger';
 import { getEffectiveLicenseStatus } from './licenseUtils';
 import { Device, License } from '../types';
@@ -439,7 +439,7 @@ export async function validatePOSLicense(
     }
 
     // 1. Client
-    const { data: client, error: clientErr } = await supabase
+    const { data: client, error: clientErr } = await supabaseAnonQuery
       .from('clients')
       .select('id, business_name, status')
       .eq('id', clientId)
@@ -463,7 +463,7 @@ export async function validatePOSLicense(
     }
 
     // 2. License
-    const { data: license, error: licErr } = await supabase
+    const { data: license, error: licErr } = await supabaseAnonQuery
       .from('licenses')
       .select('*')
       .eq('client_id', clientId)
@@ -508,7 +508,7 @@ export async function validatePOSLicense(
     // 3. Device check
     let deviceData = null;
     if (deviceFingerprint) {
-      const { data: dev } = await supabase
+      const { data: dev } = await supabaseAnonQuery
         .from('devices')
         .select('*')
         .eq('client_id', clientId)
@@ -592,7 +592,47 @@ export async function registerPOSTerminal(params: {
   deviceFingerprint: string;
   operatingSystem?: string;
   appVersion?: string;
-}): Promise<{ success: boolean; device?: import('../types').Device; message: string }> {
+}): Promise<{ success: boolean; device?: import('../types').Device; message: string; errorCode?: string }> {
+  // 1. Try secure backend server API first
+  try {
+    const sessionRes = await supabase.auth.getSession();
+    const token = sessionRes.data.session?.access_token;
+    if (token) {
+      const res = await fetch('/api/devices/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          clientId: params.clientId,
+          deviceFingerprint: params.deviceFingerprint,
+          deviceName: params.deviceName,
+          operatingSystem: params.operatingSystem || 'Web POS Client',
+          appVersion: params.appVersion || '1.0.0',
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        return {
+          success: true,
+          device: json.device,
+          message: json.message || 'تم تسجيل نقطة البيع بنجاح',
+        };
+      } else if (res.status === 403) {
+        return {
+          success: false,
+          message: json.error || 'تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم',
+          errorCode: json.error_code || 'MAX_DEVICES_REACHED',
+        };
+      }
+    }
+  } catch (apiErr) {
+    console.warn('Backend device register API unavailable, falling back to RPC:', apiErr);
+  }
+
+  // 2. Try RPC register_pos_terminal
   try {
     const { data, error } = await supabase.rpc('register_pos_terminal', {
       p_client_id: params.clientId,
@@ -621,7 +661,7 @@ export async function registerPOSTerminal(params: {
     console.warn('RPC register_pos_terminal failed, falling back to activateDevice:', err);
   }
 
-  // Fallback to client-side activation logic
+  // 3. Fallback to client-side activation logic
   const res = await activateDevice({
     licenseKey: params.licenseKey,
     deviceName: params.deviceName,
@@ -634,6 +674,7 @@ export async function registerPOSTerminal(params: {
     success: res.success,
     device: res.device,
     message: res.message,
+    errorCode: res.errorCode,
   };
 }
 

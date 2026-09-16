@@ -19,11 +19,16 @@ export function ClientProtectedRoute() {
       if (!client || client.id !== clientUser.client_id) {
         loadClient(clientUser.client_id);
       }
-      if (deviceStatus === 'loading' || !client) {
+    }
+  }, [isSuperAdmin, clientUser?.client_id, client?.id, loadClient]);
+
+  useEffect(() => {
+    if (!isSuperAdmin && clientUser?.client_id && client?.id === clientUser.client_id) {
+      if (deviceStatus === 'loading') {
         initializeDevice(clientUser.client_id);
       }
     }
-  }, [isSuperAdmin, clientUser?.client_id, client?.id, deviceStatus, initializeDevice, loadClient]);
+  }, [isSuperAdmin, clientUser?.client_id, client?.id, deviceStatus, initializeDevice]);
 
   if (!initialized || loading) {
     return (
