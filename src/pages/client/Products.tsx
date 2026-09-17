@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useCurrency } from '../../hooks/useCurrency';
 import { PermissionGuard } from '../../components/client/PermissionGuard';
 import { 
   fetchProducts, 
@@ -56,6 +57,7 @@ export function ProductsPage() {
   const { client } = useClientStore();
   const { clientUser } = useAuthStore();
   const { hasPermission } = usePermissions();
+  const { currencySymbol } = useCurrency();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<ProductCategory[]>([]);
@@ -580,10 +582,10 @@ export function ProductsPage() {
                         )}
                       </td>
                       <td className="py-3 px-4 font-mono text-slate-600">
-                        {Number(p.cost_price).toFixed(2)} {client?.currency || 'ر.س'}
+                        {Number(p.cost_price).toFixed(2)} {currencySymbol}
                       </td>
                       <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                        {Number(p.selling_price).toFixed(2)} {client?.currency || 'ر.س'}
+                        {Number(p.selling_price).toFixed(2)} {currencySymbol}
                       </td>
                       <td className="py-3 px-4">
                         {p.track_stock ? (
@@ -895,7 +897,7 @@ export function ProductsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    سعر التكلفة ({client?.currency || 'ر.س'})
+                    سعر التكلفة ({currencySymbol})
                   </label>
                   <input
                     type="number"
@@ -909,7 +911,7 @@ export function ProductsPage() {
 
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    سعر البيع ({client?.currency || 'ر.س'}) <span className="text-rose-500">*</span>
+                    سعر البيع ({currencySymbol}) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -1065,13 +1067,13 @@ export function ProductsPage() {
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center">
                   <span className="text-slate-500 block text-[11px]">سعر التكلفة</span>
                   <span className="font-mono font-bold text-slate-800 text-sm mt-1 block">
-                    {Number(selectedProduct.cost_price).toFixed(2)} {client?.currency || 'ر.س'}
+                    {Number(selectedProduct.cost_price).toFixed(2)} {currencySymbol}
                   </span>
                 </div>
                 <div className="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-center">
                   <span className="text-indigo-700 block text-[11px] font-medium">سعر البيع</span>
                   <span className="font-mono font-black text-indigo-900 text-sm mt-1 block">
-                    {Number(selectedProduct.selling_price).toFixed(2)} {client?.currency || 'ر.س'}
+                    {Number(selectedProduct.selling_price).toFixed(2)} {currencySymbol}
                   </span>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center">

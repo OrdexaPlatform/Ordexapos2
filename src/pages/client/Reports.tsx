@@ -379,7 +379,8 @@ export function ReportsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {Object.entries(expensesByCategory).map(([catKey, amount]) => {
+            {Object.entries(expensesByCategory).map(([catKey, rawAmount]) => {
+              const amount = Number(rawAmount);
               const catInfo = EXPENSE_CATEGORIES[catKey] || { label: catKey, color: 'bg-slate-100 text-slate-700' };
               return (
                 <div key={catKey} className="p-3 rounded-xl border border-slate-100 bg-slate-50/50">

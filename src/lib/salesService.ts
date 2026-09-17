@@ -8,6 +8,7 @@ import {
   SaleStatus 
 } from '../types';
 import { logActivity } from './activityLogger';
+import { getCurrencySymbol, formatCurrencyAmount } from './currency';
 
 export interface CompleteSaleItemInput {
   product_id: string;
@@ -76,8 +77,11 @@ export interface FetchSalesResult {
 /**
  * Format currency display
  */
-export function formatCurrency(amount: number, currency: string = 'ر.س'): string {
-  return `${Number(amount || 0).toLocaleString('ar-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+export function formatCurrency(amount: number, currency?: string): string {
+  if (!currency) {
+    return formatCurrencyAmount(amount);
+  }
+  return `${Number(amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${getCurrencySymbol(currency)}`;
 }
 
 /**

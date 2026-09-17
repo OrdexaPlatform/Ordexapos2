@@ -21,6 +21,7 @@ import { ShiftZReportModal } from './ShiftZReportModal';
 import { POSTerminalLicenseModal } from './POSTerminalLicenseModal';
 import { useDeviceStore } from '../../../store/deviceStore';
 import { useClientStore } from '../../../store/clientStore';
+import { useCurrency } from '../../../hooks/useCurrency';
 
 interface POSShiftBarProps {
   activeShift: Shift | null;
@@ -35,6 +36,7 @@ export const POSShiftBar: React.FC<POSShiftBarProps> = ({
   clientId,
   onRefresh,
 }) => {
+  const { currencySymbol } = useCurrency();
   const [isOpenModalOpen, setIsOpenModalOpen] = useState<boolean>(false);
   const [isCloseModalOpen, setIsCloseModalOpen] = useState<boolean>(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState<boolean>(false);
@@ -154,7 +156,7 @@ export const POSShiftBar: React.FC<POSShiftBarProps> = ({
                 <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
                 <span>المتوقع بالدرج:</span>
                 <span className="font-mono text-emerald-700 font-bold">
-                  {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                  {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
                 </span>
               </div>
             </div>

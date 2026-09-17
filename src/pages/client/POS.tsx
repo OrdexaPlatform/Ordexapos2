@@ -35,6 +35,8 @@ import { POSPaymentModal } from '../../components/client/POSPaymentModal';
 import { InvoiceReceiptModal } from '../../components/client/InvoiceReceiptModal';
 import { POSTerminalConfigModal } from '../../components/client/POSTerminalConfigModal';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
+import { useCurrency } from '../../hooks/useCurrency';
+import { offlineStorage } from '../../lib/offline/offlineStorage';
 import { useShiftStore } from '../../store/shiftStore';
 import { useDeviceStore } from '../../store/deviceStore';
 import { POSShiftBar } from '../../components/client/shifts/POSShiftBar';
@@ -46,6 +48,7 @@ export const POSPage: React.FC = () => {
   const { clientUser } = useAuthStore();
   const { client } = useClientStore();
   const { hasPermission } = usePermissions();
+  const { currencySymbol } = useCurrency();
   const canEditPrice = hasPermission('pos.edit_price');
   const clientId = clientUser?.client_id;
 
@@ -57,7 +60,7 @@ export const POSPage: React.FC = () => {
     device: currentDevice 
   } = useDeviceStore();
 
-  // Phase 10: Active Shift & Cash Drawer Store
+  // POS Active Shift & Cash Drawer Store
   const { activeShift, loadActiveShift } = useShiftStore();
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState<boolean>(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState<boolean>(false);
@@ -111,54 +114,123 @@ export const POSPage: React.FC = () => {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch initial catalog data
+  // Fetch initial catalog data with offline resilience
   const loadPOSData = async () => {
     if (!clientId) return;
     setIsLoading(true);
     setErrorMessage(null);
 
     try {
-      // 1. Fetch Warehouses
-      const { data: whData } = await supabase
-        .from('warehouses')
-        .select('*')
-        .eq('client_id', clientId)
-        .eq('is_active', true)
-        .order('is_default', { ascending: false });
+      let loadedWarehouses: Warehouse[] = [];
+      let loadedCategories: ProductCategory[] = [];
+      let loadedProducts: Product[] = [];
 
-      if (whData && whData.length > 0) {
-        setWarehouses(whData);
+      // 1. If online, fetch fresh data from database
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        try {
+          const { data: whData } = await supabase
+            .from('warehouses')
+            .select('*')
+            .eq('client_id', clientId)
+            .eq('is_active', true)
+            .order('is_default', { ascending: false });
+
+          if (whData && whData.length > 0) {
+            loadedWarehouses = whData;
+            await offlineStorage.saveWarehouses(whData);
+            try { localStorage.setItem(`ordexa_cached_warehouses_${clientId}`, JSON.stringify(whData)); } catch {}
+          }
+
+          const { data: catData } = await supabase
+            .from('product_categories')
+            .select('*')
+            .eq('client_id', clientId)
+            .eq('is_active', true)
+            .order('name');
+
+          if (catData && catData.length > 0) {
+            loadedCategories = catData;
+            await offlineStorage.saveCategories(catData);
+            try { localStorage.setItem(`ordexa_cached_categories_${clientId}`, JSON.stringify(catData)); } catch {}
+          }
+
+          const { data: prodData, error: prodErr } = await supabase
+            .from('products')
+            .select(`
+              *,
+              category:product_categories(name),
+              unit:product_units(name, symbol),
+              barcodes:product_barcodes(barcode, is_primary)
+            `)
+            .eq('client_id', clientId)
+            .eq('is_active', true)
+            .order('name');
+
+          if (!prodErr && prodData) {
+            loadedProducts = prodData;
+            await offlineStorage.saveProducts(prodData);
+            try { localStorage.setItem(`ordexa_cached_products_${clientId}`, JSON.stringify(prodData)); } catch {}
+          }
+        } catch (netErr) {
+          console.warn('Online POS data fetch encountered network error, falling back to offline storage:', netErr);
+        }
+      }
+
+      // 2. Offline fallback if empty or offline
+      if (loadedWarehouses.length === 0) {
+        const cachedWh = await offlineStorage.getWarehouses();
+        if (cachedWh && cachedWh.length > 0) {
+          loadedWarehouses = cachedWh.filter(w => !w.client_id || w.client_id === clientId);
+        } else {
+          try {
+            const raw = localStorage.getItem(`ordexa_cached_warehouses_${clientId}`);
+            if (raw) loadedWarehouses = JSON.parse(raw);
+          } catch {}
+        }
+      }
+
+      if (loadedCategories.length === 0) {
+        const cachedCats = await offlineStorage.getCategories();
+        if (cachedCats && cachedCats.length > 0) {
+          loadedCategories = cachedCats.filter(c => !c.client_id || c.client_id === clientId);
+        } else {
+          try {
+            const raw = localStorage.getItem(`ordexa_cached_categories_${clientId}`);
+            if (raw) loadedCategories = JSON.parse(raw);
+          } catch {}
+        }
+      }
+
+      if (loadedProducts.length === 0) {
+        const cachedProds = await offlineStorage.getProducts();
+        if (cachedProds && cachedProds.length > 0) {
+          loadedProducts = cachedProds.filter(p => !p.client_id || p.client_id === clientId);
+        } else {
+          try {
+            const raw = localStorage.getItem(`ordexa_cached_products_${clientId}`);
+            if (raw) loadedProducts = JSON.parse(raw);
+          } catch {}
+        }
+      }
+
+      if (loadedWarehouses.length > 0) {
+        setWarehouses(loadedWarehouses);
         if (!selectedWarehouseId) {
-          const defaultWh = whData.find(w => w.is_default) || whData[0];
+          const defaultWh = loadedWarehouses.find(w => w.is_default) || loadedWarehouses[0];
           setWarehouseId(defaultWh.id);
         }
       }
 
-      // 2. Fetch Categories
-      const { data: catData } = await supabase
-        .from('product_categories')
-        .select('*')
-        .eq('client_id', clientId)
-        .eq('is_active', true)
-        .order('name');
+      if (loadedCategories.length > 0) {
+        setCategories(loadedCategories);
+      }
 
-      if (catData) setCategories(catData);
-
-      // 3. Fetch Active Products
-      const { data: prodData, error: prodErr } = await supabase
-        .from('products')
-        .select(`
-          *,
-          category:product_categories(name),
-          unit:product_units(name, symbol),
-          barcodes:product_barcodes(barcode, is_primary)
-        `)
-        .eq('client_id', clientId)
-        .eq('is_active', true)
-        .order('name');
-
-      if (prodErr) throw prodErr;
-      setProducts(prodData || []);
+      if (loadedProducts.length > 0) {
+        setProducts(loadedProducts);
+        setErrorMessage(null);
+      } else if (!navigator.onLine) {
+        setErrorMessage('لا توجد أصناف مخزنة محلياً للعمل بدون إنترنت. يرجى الاتصال بالإنترنت مرة واحدة لتحميل الأصناف.');
+      }
     } catch (err: any) {
       console.error('Error loading POS data:', err);
       setErrorMessage(err.message || 'حدث خطأ أثناء تحميل بيانات نقطة البيع');
@@ -482,7 +554,7 @@ export const POSPage: React.FC = () => {
         </div>
       </header>
 
-      {/* Phase 10: POS Active Shift Status & Cash Drawer Bar */}
+      {/* POS Active Shift Status & Cash Drawer Bar */}
       <POSShiftBar 
         activeShift={activeShift} 
         warehouseId={selectedWarehouseId || undefined} 
@@ -897,7 +969,7 @@ export const POSPage: React.FC = () => {
                   onClick={() => setInvoiceDiscount(invoiceDiscount, invoiceDiscountType === 'fixed' ? 'percentage' : 'fixed')}
                   className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded border border-slate-200"
                 >
-                  {invoiceDiscountType === 'fixed' ? 'ر.س' : '%'}
+                  {invoiceDiscountType === 'fixed' ? currencySymbol : '%'}
                 </button>
               </div>
             </div>

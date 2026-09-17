@@ -15,6 +15,8 @@ interface ClientState {
   resetClient: () => void;
 }
 
+let previousManifestBlobUrl: string | null = null;
+
 export function updateDynamicManifestLink(clientCode: string, businessName?: string) {
   if (typeof document === 'undefined') return;
   
@@ -23,18 +25,58 @@ export function updateDynamicManifestLink(clientCode: string, businessName?: str
     document.title = `${businessName} - Ordexa POS`;
   }
 
-  // 2. Update Dynamic PWA Manifest Link
-  let manifestEl = document.getElementById('app-manifest') as HTMLLinkElement | null;
-  const manifestUrl = `/api/pwa/manifest/${encodeURIComponent(clientCode)}`;
-  
-  if (manifestEl) {
-    manifestEl.href = manifestUrl;
-  } else {
-    manifestEl = document.createElement('link');
-    manifestEl.id = 'app-manifest';
-    manifestEl.rel = 'manifest';
-    manifestEl.href = manifestUrl;
-    document.head.appendChild(manifestEl);
+  // 2. Generate Dynamic PWA Manifest Blob (Works on any static host including Vercel)
+  try {
+    if (previousManifestBlobUrl) {
+      URL.revokeObjectURL(previousManifestBlobUrl);
+      previousManifestBlobUrl = null;
+    }
+
+    const manifestData = {
+      name: businessName ? `${businessName} - Ordexa POS` : 'Ordexa POS',
+      short_name: businessName || 'Ordexa POS',
+      description: `نظام نقاط البيع وإدارة الفواتير السحابي والأوفلاين - ${businessName || 'Ordexa POS'}`,
+      start_url: `/pos/${encodeURIComponent(clientCode)}`,
+      scope: '/',
+      display: 'standalone',
+      background_color: '#0f172a',
+      theme_color: '#0f172a',
+      dir: 'rtl',
+      lang: 'ar',
+      icons: [
+        {
+          src: '/assets/ordexa-icon.png',
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'any'
+        },
+        {
+          src: '/assets/ordexa-icon.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any maskable'
+        }
+      ]
+    };
+
+    const manifestBlob = new Blob([JSON.stringify(manifestData, null, 2)], {
+      type: 'application/manifest+json',
+    });
+    const manifestUrl = URL.createObjectURL(manifestBlob);
+    previousManifestBlobUrl = manifestUrl;
+
+    let manifestEl = document.getElementById('app-manifest') as HTMLLinkElement | null;
+    if (manifestEl) {
+      manifestEl.href = manifestUrl;
+    } else {
+      manifestEl = document.createElement('link');
+      manifestEl.id = 'app-manifest';
+      manifestEl.rel = 'manifest';
+      manifestEl.href = manifestUrl;
+      document.head.appendChild(manifestEl);
+    }
+  } catch (e) {
+    console.warn('Could not generate dynamic manifest blob:', e);
   }
 }
 
@@ -55,7 +97,7 @@ export const useClientStore = create<ClientState>((set, get) => ({
     set({ loading: true, error: null });
 
     try {
-      // 1. Try public API first (fast & secure server-side isolation)
+      // 1. Try public API first (fast & secure server-side isolation when running with custom server)
       try {
         const res = await fetch(`/api/client/public-pos-config/${encodeURIComponent(normalizedCode)}`);
         
@@ -85,46 +127,69 @@ export const useClientStore = create<ClientState>((set, get) => ({
 
             return clientData;
           }
-        } else if (res.status === 404) {
-          throw new Error(`لم يتم العثور على منشأة بالرمز (${normalizedCode})`);
         } else if (res.status === 403) {
           const errJson = await res.json().catch(() => ({}));
-          throw new Error(errJson.error || 'حساب هذه المنشأة غير نشط أو موقوف مؤقتاً');
+          if (errJson.error) {
+            throw new Error(errJson.error);
+          }
         }
       } catch (fetchErr: any) {
-        // If 403 or 404 with specific message, propagate
-        if (fetchErr.message?.includes('غير نشط') || fetchErr.message?.includes('لم يتم العثور')) {
+        if (fetchErr.message?.includes('غير نشط')) {
           throw fetchErr;
         }
-        console.warn('API endpoint did not return valid JSON config, proceeding to direct Supabase query:', fetchErr);
+        console.warn('API endpoint did not return valid JSON config (or running on static Vercel), proceeding to direct Supabase query:', fetchErr);
       }
 
-      // 2. Direct Supabase fallback if API route did not respond with JSON
+      // 2. Direct Supabase query (Essential for Vercel production hosting and direct client connections)
       const { data: dbClient, error: dbErr } = await supabase
         .from('clients')
         .select('*')
         .ilike('client_code', normalizedCode)
         .maybeSingle();
 
-      if (dbErr) throw dbErr;
-      if (!dbClient) throw new Error(`لم يتم العثور على منشأة بالرمز (${normalizedCode})`);
+      if (dbErr) {
+        console.warn('Supabase query for client code failed:', dbErr);
+      } else if (dbClient) {
+        try {
+          localStorage.setItem(`ordexa_cached_client_${dbClient.id}`, JSON.stringify(dbClient));
+          localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(dbClient));
+          localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
+        } catch {}
 
-      try {
-        localStorage.setItem(`ordexa_cached_client_${dbClient.id}`, JSON.stringify(dbClient));
-        localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(dbClient));
-        localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
-      } catch {}
+        updateDynamicManifestLink(dbClient.client_code, dbClient.business_name);
 
-      updateDynamicManifestLink(dbClient.client_code, dbClient.business_name);
+        set({
+          client: dbClient as Client,
+          effectiveLicenseStatus: dbClient.status === 'active' ? 'active' : 'inactive',
+          loading: false,
+          error: null,
+        });
 
-      set({
-        client: dbClient as Client,
-        effectiveLicenseStatus: dbClient.status === 'active' ? 'active' : 'inactive',
-        loading: false,
-        error: null,
-      });
+        return dbClient as Client;
+      } else {
+        // Client not found in database, check offline cache
+        try {
+          const cachedRaw = localStorage.getItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`);
+          if (cachedRaw) {
+            const cachedClient = JSON.parse(cachedRaw) as Client;
+            updateDynamicManifestLink(cachedClient.client_code, cachedClient.business_name);
+            set({
+              client: cachedClient,
+              effectiveLicenseStatus: cachedClient.status === 'active' ? 'active' : 'inactive',
+              loading: false,
+              error: null,
+            });
+            return cachedClient;
+          }
+        } catch {}
 
-      return dbClient as Client;
+        set({
+          client: null,
+          loading: false,
+          error: `رمز المنشأة (${normalizedCode}) غير مسجل في النظام أو تم إيقافه`,
+        });
+        return null;
+      }
     } catch (err: any) {
       console.warn('Network fetch for client code failed, checking offline cache:', err);
 
@@ -225,7 +290,7 @@ export const useClientStore = create<ClientState>((set, get) => ({
               license_key: cachedLicenseRecord.license_key,
               status: cachedLicenseRecord.status,
             } as any) : null,
-            effectiveLicenseStatus: cachedLicenseRecord ? cachedLicenseRecord.status : 'unknown',
+            effectiveLicenseStatus: cachedLicenseRecord ? cachedLicenseRecord.status : (parsedClient.status === 'active' ? 'active' : 'unknown'),
             loading: false,
             error: null,
           });

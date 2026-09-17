@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { PaymentMethod } from '../../types';
 import { formatCurrency } from '../../lib/salesService';
+import { useCurrency } from '../../hooks/useCurrency';
 
 interface POSPaymentModalProps {
   isOpen: boolean;
@@ -39,6 +40,7 @@ export const POSPaymentModal: React.FC<POSPaymentModalProps> = ({
   itemsCount,
   onConfirmPayment
 }) => {
+  const { currencySymbol } = useCurrency();
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [receivedAmount, setReceivedAmount] = useState<number>(total);
   const [reference, setReference] = useState<string>('');
@@ -234,7 +236,7 @@ export const POSPaymentModal: React.FC<POSPaymentModalProps> = ({
                     placeholder="0.00"
                   />
                   <div className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                    ر.س
+                    {currencySymbol}
                   </div>
                 </div>
               </div>
@@ -281,7 +283,7 @@ export const POSPaymentModal: React.FC<POSPaymentModalProps> = ({
                   onClick={() => handleQuickCash(500)}
                   className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
                 >
-                  500 ر.س
+                  500 {currencySymbol}
                 </button>
               </div>
 

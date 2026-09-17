@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useShiftStore } from '../../store/shiftStore';
+import { useCurrency } from '../../hooks/useCurrency';
 import { shiftService } from '../../lib/shiftService';
 import { warehouseService } from '../../lib/warehouseService';
 import { Shift, Warehouse } from '../../types';
@@ -32,6 +33,7 @@ import toast from 'react-hot-toast';
 export const ShiftsPage: React.FC = () => {
   const { clientUser } = useAuthStore();
   const { activeShift, loadActiveShift } = useShiftStore();
+  const { currencySymbol, formatCurrency } = useCurrency();
 
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -202,7 +204,7 @@ export const ShiftsPage: React.FC = () => {
               <div className="mt-2 text-xs text-slate-600 flex items-center justify-between">
                 <span>المتوقع بالدرج:</span>
                 <span className="font-mono font-bold text-slate-900">
-                  {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                  {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
                 </span>
               </div>
             </div>
@@ -223,10 +225,10 @@ export const ShiftsPage: React.FC = () => {
           </div>
           <div className="text-xl font-mono font-black text-slate-900">
             {stats.todaySales.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-            <span className="text-xs font-bold text-slate-400 mr-1.5 font-sans">ر.س</span>
+            <span className="text-xs font-bold text-slate-400 mr-1.5 font-sans">{currencySymbol}</span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            منها نقدي: {stats.todayCashSales.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+            منها نقدي: {stats.todayCashSales.toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
           </p>
         </div>
 
@@ -267,7 +269,7 @@ export const ShiftsPage: React.FC = () => {
               : 'text-blue-600'
           }`}>
             {stats.totalDifferences > 0 ? `+${stats.totalDifferences.toFixed(2)}` : stats.totalDifferences.toFixed(2)}
-            <span className="text-xs font-bold text-slate-400 mr-1.5 font-sans">ر.س</span>
+            <span className="text-xs font-bold text-slate-400 mr-1.5 font-sans">{currencySymbol}</span>
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
             {stats.totalDifferences === 0 ? 'مطابقة تامة لكافة الورديات' : stats.totalDifferences < 0 ? 'إجمالي عجز مسجل' : 'إجمالي فائض مسجل'}

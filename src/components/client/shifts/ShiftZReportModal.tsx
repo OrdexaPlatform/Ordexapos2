@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Printer, X, Receipt, CheckCircle2, AlertTriangle, ArrowDownRight, ArrowUpLeft } from 'lucide-react';
 import { Shift, CashDrawerTransaction } from '../../../types';
 import { useClientStore } from '../../../store/clientStore';
+import { useCurrency } from '../../../hooks/useCurrency';
 import { shiftService } from '../../../lib/shiftService';
 
 interface ShiftZReportModalProps {
@@ -16,6 +17,7 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
   shift,
 }) => {
   const { client } = useClientStore();
+  const { currencySymbol } = useCurrency();
   const [transactions, setTransactions] = useState<CashDrawerTransaction[]>([]);
   const [printFormat, setPrintFormat] = useState<'thermal' | 'a4'>('thermal');
 
@@ -172,14 +174,14 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
               )}
               <div className="flex justify-between pt-1 border-t border-slate-200 font-black text-slate-900">
                 <span>النقد المتوقع بالدرج:</span>
-                <span className="font-mono">{shift.closing_cash_expected.toFixed(2)} ر.س</span>
+                <span className="font-mono">{shift.closing_cash_expected.toFixed(2)} {currencySymbol}</span>
               </div>
 
               {isClosed && shift.closing_cash_actual !== null && shift.closing_cash_actual !== undefined && (
                 <>
                   <div className="flex justify-between font-black text-slate-900 pt-1">
                     <span>النقد الفعلي المعدود:</span>
-                    <span className="font-mono">{shift.closing_cash_actual.toFixed(2)} ر.س</span>
+                    <span className="font-mono">{shift.closing_cash_actual.toFixed(2)} {currencySymbol}</span>
                   </div>
                   <div className={`flex justify-between font-black p-2 rounded-lg mt-1 ${
                     difference === 0 ? 'bg-emerald-50 text-emerald-800' : difference < 0 ? 'bg-rose-50 text-rose-800' : 'bg-blue-50 text-blue-800'
@@ -218,7 +220,7 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
               )}
               <div className="flex justify-between pt-1 border-t border-slate-200 font-black text-slate-900 text-sm">
                 <span>صافي مبيعات الوردية:</span>
-                <span className="font-mono">{shift.total_sales_amount.toFixed(2)} ر.س</span>
+                <span className="font-mono">{shift.total_sales_amount.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between text-slate-500 pt-0.5">
                 <span>إجمالي عدد الفواتير:</span>

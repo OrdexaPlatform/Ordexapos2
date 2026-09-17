@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useCurrency } from '../../hooks/useCurrency';
 import { PermissionGuard } from '../../components/client/PermissionGuard';
 import { 
   fetchInventoryStock, 
@@ -56,6 +57,7 @@ export function InventoryPage() {
   const { client } = useClientStore();
   const { clientUser } = useAuthStore();
   const { hasPermission } = usePermissions();
+  const { currencySymbol } = useCurrency();
 
   const [stockRows, setStockRows] = useState<ProductStockRow[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseType[]>([]);
@@ -586,7 +588,7 @@ export function InventoryPage() {
                       {row.minStock}
                     </td>
                     <td className="py-3 px-4 font-mono text-slate-600">
-                      {row.costPrice.toFixed(2)} {client?.currency || 'ر.س'}
+                      {row.costPrice.toFixed(2)} {currencySymbol}
                     </td>
                     <td className="py-3 px-4">
                       {row.status === 'out_of_stock' ? (
@@ -699,7 +701,7 @@ export function InventoryPage() {
 
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    تكلفة الوحدة ({client?.currency || 'ر.س'})
+                    تكلفة الوحدة ({currencySymbol})
                   </label>
                   <input
                     type="number"

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useShiftStore } from '../../../store/shiftStore';
 import { useAuthStore } from '../../../store/authStore';
+import { useCurrency } from '../../../hooks/useCurrency';
 import { shiftService } from '../../../lib/shiftService';
 import { Shift, ShiftSummary } from '../../../types';
 import { POSPrintManager } from '../../../lib/printing/printManager';
@@ -31,6 +32,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   shift,
   onShiftClosed,
 }) => {
+  const { currencySymbol } = useCurrency();
   const { clientUser } = useAuthStore();
   const clientId = clientUser?.client_id;
   const { closeShift, isLoading } = useShiftStore();
@@ -186,7 +188,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               <span className="font-mono text-sm font-bold text-slate-900">
                 {(summary?.opening_cash || shift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}
               </span>
-              <span className="text-[10px] text-slate-400 mr-1">ر.س</span>
+              <span className="text-[10px] text-slate-400 mr-1">{currencySymbol}</span>
             </div>
 
             <div className="p-3 bg-emerald-50/60 border border-emerald-100 rounded-xl">
@@ -197,7 +199,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               <span className="font-mono text-sm font-bold text-emerald-900">
                 {(summary?.total_cash_sales || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
               </span>
-              <span className="text-[10px] text-emerald-600 mr-1">ر.س</span>
+              <span className="text-[10px] text-emerald-600 mr-1">{currencySymbol}</span>
             </div>
 
             <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-xl">
@@ -208,7 +210,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               <span className="font-mono text-sm font-bold text-blue-900">
                 {(summary?.total_card_sales || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
               </span>
-              <span className="text-[10px] text-blue-600 mr-1">ر.س</span>
+              <span className="text-[10px] text-blue-600 mr-1">{currencySymbol}</span>
             </div>
 
             <div className="p-3 bg-slate-50 border border-slate-200/70 rounded-xl">
@@ -232,7 +234,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
                   إيداعات نثرية إضافية:
                 </span>
                 <span className="font-mono text-xs font-bold text-amber-900">
-                  +{(summary?.total_cash_in || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                  +{(summary?.total_cash_in || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
                 </span>
               </div>
               <div className="p-2.5 bg-rose-50/50 border border-rose-100 rounded-xl flex items-center justify-between">
@@ -241,7 +243,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
                   سحوبات ومصروفات نقدية:
                 </span>
                 <span className="font-mono text-xs font-bold text-rose-900">
-                  -{(summary?.total_cash_out || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                  -{(summary?.total_cash_out || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
                 </span>
               </div>
             </div>
@@ -321,7 +323,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               </div>
             </div>
             <div className="font-mono text-base font-black text-left shrink-0">
-              {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} ر.س
+              {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} {currencySymbol}
             </div>
           </div>
 

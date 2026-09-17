@@ -34,7 +34,7 @@ interface DrawerTransaction {
 
 export function TreasuryPage() {
   const { client } = useClientStore();
-  const { currentShift, openShift } = useShiftStore();
+  const { activeShift: currentShift, openShift } = useShiftStore();
   const { formatPrice } = useCurrency();
 
   const [transactions, setTransactions] = useState<DrawerTransaction[]>([]);

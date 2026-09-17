@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
 import { useDeviceStore } from '../../store/deviceStore';
 import { useShiftStore } from '../../store/shiftStore';
+import { useCurrency } from '../../hooks/useCurrency';
 import { 
   Building2, 
   ShieldCheck, 
@@ -28,6 +29,7 @@ export function ClientDashboard() {
   const { client, license, effectiveLicenseStatus } = useClientStore();
   const { device, deviceName, fingerprint, operatingSystem, appVersion } = useDeviceStore();
   const { activeShift, loadActiveShift } = useShiftStore();
+  const { currencySymbol, currencyCode } = useCurrency();
 
   const [isOpenShiftModalOpen, setIsOpenShiftModalOpen] = useState(false);
 
@@ -120,7 +122,7 @@ export function ClientDashboard() {
             </div>
           </div>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span>العملة: <strong className="text-slate-800">{client?.currency || 'USD'}</strong></span>
+            <span>العملة: <strong className="text-slate-800">{currencyCode} ({currencySymbol})</strong></span>
             <span>اللغة: <strong className="text-slate-800">{client?.language === 'ar' ? 'العربية' : client?.language || 'ar'}</strong></span>
           </div>
         </div>
@@ -251,7 +253,7 @@ export function ClientDashboard() {
                 <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200">
                   <span className="text-slate-600 font-bold">الرصيد المتوقع بالدرج:</span>
                   <span className="font-mono font-black text-emerald-700 text-sm">
-                    {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س
+                    {(activeShift.closing_cash_expected || activeShift.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })} {currencySymbol}
                   </span>
                 </div>
               </div>
@@ -322,7 +324,7 @@ export function ClientDashboard() {
               <span>حماية الدرج والورديات:</span>
               <span className="font-bold text-emerald-700 flex items-center gap-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                مفعلة بالكامل (Phase 10)
+                مفعلة بالكامل
               </span>
             </div>
           </div>
@@ -345,13 +347,13 @@ export function ClientDashboard() {
         </div>
       </div>
 
-      {/* 4. Architecture Foundation Notice */}
+      {/* Security & Shifts Architecture Status */}
       <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-2xl p-4 flex items-start gap-3">
         <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
         <div className="text-xs text-emerald-950 space-y-1">
-          <p className="font-bold">المرحلة العاشرة: إدارة الورديات ودرج النقدية (Phase 10 — Cash Drawer & Shifts)</p>
+          <p className="font-bold">إدارة الورديات ودرج النقدية وجاهزية التشغيل</p>
           <p className="text-emerald-800 leading-relaxed">
-            تم بنجاح تفعيل حماية جلسات البيع الذرية عبر الخادم (Atomic Server-Side Shift Enforcement)، ومنع البيع العشوائي بدون وردية مسجلة، وتتبع حركات الدرج النثري وإصدار تقارير Z-Report اليومية بدقة محاسبية كاملة.
+            تم تفعيل حماية جلسات البيع الذرية عبر الخادم (Atomic Server-Side Shift Enforcement)، ومنع البيع العشوائي بدون وردية مسجلة، وتتبع حركات الدرج النثري وإصدار تقارير Z-Report اليومية بدقة محاسبية كاملة.
           </p>
         </div>
       </div>

@@ -18,6 +18,7 @@ export function useCurrency() {
     currencyCode,
     currencySymbol,
     formatCurrency,
-    supportedCurrencies: SUPPORTED_CURRENCIES,
+    formatPrice: formatCurrency,
+    supportedCurrencies: Object.values(SUPPORTED_CURRENCIES),
   };
 }

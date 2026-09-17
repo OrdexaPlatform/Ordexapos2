@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   Store, 
   Receipt, 
-  ShieldCheck, 
   Key, 
   Smartphone, 
   Phone, 
@@ -14,16 +13,167 @@ import {
   CheckCircle2, 
   Layers, 
   Info,
-  Monitor
+  Monitor,
+  Save,
+  Percent,
+  Warehouse as WarehouseIcon,
+  FileText,
+  Loader2,
+  Upload,
+  RefreshCw
 } from 'lucide-react';
 import { useClientStore } from '../../store/clientStore';
 import { useDeviceStore } from '../../store/deviceStore';
+import { useCurrency } from '../../hooks/useCurrency';
+import { warehouseService } from '../../lib/warehouseService';
+import { supabase } from '../../lib/supabase';
+import { Warehouse, Client } from '../../types';
 import { format } from 'date-fns';
+import toast from 'react-hot-toast';
 
 export function ClientSettings() {
-  const { client, license, effectiveLicenseStatus } = useClientStore();
+  const { client, license, effectiveLicenseStatus, loadClient } = useClientStore();
   const { fingerprint, deviceName, operatingSystem, isDesktopNative } = useDeviceStore();
-  const [receiptWidth, setReceiptWidth] = useState<'80mm' | '58mm'>('80mm');
+  const { supportedCurrencies } = useCurrency();
+
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [activeTab, setActiveTab] = useState<'general' | 'financial' | 'receipt' | 'terminal'>('general');
+  const [saving, setSaving] = useState(false);
+
+  // Form State initialized from client
+  const [businessName, setBusinessName] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [address, setAddress] = useState('');
+  const [logo, setLogo] = useState('');
+  const [currency, setCurrency] = useState('EGP');
+  const [language, setLanguage] = useState('ar');
+  const [taxNumber, setTaxNumber] = useState('');
+  const [taxRate, setTaxRate] = useState<number>(14);
+  const [receiptHeader, setReceiptHeader] = useState('');
+  const [receiptFooter, setReceiptFooter] = useState('');
+  const [paperSize, setPaperSize] = useState<'80mm' | '58mm'>('80mm');
+  const [defaultWarehouseId, setDefaultWarehouseId] = useState('');
+
+  // Sync state when client changes
+  useEffect(() => {
+    if (client) {
+      setBusinessName(client.business_name || '');
+      setCustomerName(client.customer_name || '');
+      setOwnerName(client.owner_name || '');
+      setPhone(client.phone || '');
+      setEmail(client.email || '');
+      setAddress(client.address || '');
+      setLogo(client.logo || '');
+      setCurrency(client.currency || 'EGP');
+      setLanguage(client.language || 'ar');
+      setReceiptHeader((client as any).receipt_header || '');
+      setReceiptFooter((client as any).receipt_footer || 'شكراً لزيارتكم • نسعد بخدمتكم دائماً');
+      setTaxNumber((client as any).tax_number || '');
+      setTaxRate((client as any).tax_rate ?? 14);
+      setPaperSize((client as any).paper_size || '80mm');
+      setDefaultWarehouseId((client as any).default_warehouse_id || '');
+    }
+  }, [client]);
+
+  // Load warehouses
+  useEffect(() => {
+    if (client?.id) {
+      warehouseService.fetchWarehouses(client.id)
+        .then((whs) => {
+          setWarehouses(whs);
+          if (!defaultWarehouseId && whs.length > 0) {
+            setDefaultWarehouseId(whs[0].id);
+          }
+        })
+        .catch((err) => console.warn('Failed to load warehouses:', err));
+    }
+  }, [client?.id]);
+
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!client?.id) {
+      toast.error('لم يتم تحديد المنشأة');
+      return;
+    }
+
+    if (!businessName.trim()) {
+      toast.error('اسم المنشأة مطلوب');
+      return;
+    }
+
+    setSaving(true);
+    const updates: Partial<Client> & Record<string, any> = {
+      business_name: businessName.trim(),
+      customer_name: customerName.trim() || businessName.trim(),
+      owner_name: ownerName.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+      address: address.trim(),
+      logo: logo.trim(),
+      currency,
+      language,
+      tax_number: taxNumber.trim(),
+      tax_rate: Number(taxRate) || 0,
+      receipt_header: receiptHeader.trim(),
+      receipt_footer: receiptFooter.trim(),
+      paper_size: paperSize,
+      default_warehouse_id: defaultWarehouseId || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      // 1. Try server API
+      let updatedClient: Client | null = null;
+      try {
+        const res = await fetch('/api/client/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: client.id, updates }),
+        });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.client) {
+            updatedClient = json.client;
+          }
+        }
+      } catch (apiErr) {
+        console.warn('API update failed, falling back to direct DB update:', apiErr);
+      }
+
+      // 2. Direct Supabase update fallback (for static Vercel or direct client)
+      if (!updatedClient) {
+        const { data: dbUpdated, error: dbErr } = await supabase
+          .from('clients')
+          .update(updates)
+          .eq('id', client.id)
+          .select()
+          .maybeSingle();
+
+        if (dbErr) throw dbErr;
+        updatedClient = dbUpdated as Client;
+      }
+
+      // 3. Update offline storage & zustand store
+      const finalClient = { ...client, ...updates, ...(updatedClient || {}) };
+      try {
+        localStorage.setItem(`ordexa_cached_client_${client.id}`, JSON.stringify(finalClient));
+        if (finalClient.client_code) {
+          localStorage.setItem(`ordexa_cached_client_by_code_${finalClient.client_code.toUpperCase()}`, JSON.stringify(finalClient));
+        }
+      } catch {}
+
+      await loadClient(client.id);
+      toast.success('تم حفظ وتحديث إعدادات المنشأة بنجاح');
+    } catch (err: any) {
+      console.error('Error saving settings:', err);
+      toast.error(err.message || 'حدث خطأ أثناء حفظ الإعدادات');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12" dir="rtl">
@@ -38,180 +188,490 @@ export function ClientSettings() {
             إعدادات وهوية منشأة {client?.business_name || 'العميل'}
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            استعراض هوية المنشأة، الشعار المرتبط بالفواتير ونقاط البيع، وحالة الترخيص والأجهزة.
+            إدارة الهوية التجارية، العملة والضريبة، المستودع الافتراضي، وإعدادات طباعة الفواتير.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold">
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            <span>نقطة البيع متصلة</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleSave()}
+            disabled={saving}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-600/20 transition-all disabled:opacity-50"
+          >
+            {saving ? (
+              <>
+                <Loader2 className="animate-spin h-4 w-4" />
+                <span>جارٍ الحفظ...</span>
+              </>
+            ) : (
+              <>
+                <Save className="h-4 w-4" />
+                <span>حفظ التغييرات</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Grid: 2 Columns */}
+      {/* Tabs Navigation */}
+      <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-px">
+        <button
+          type="button"
+          onClick={() => setActiveTab('general')}
+          className={`flex items-center gap-2 px-4 py-2.5 font-bold text-sm border-b-2 transition-all shrink-0 ${
+            activeTab === 'general'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Building2 className="h-4 w-4" />
+          <span>البيانات الأساسية والهوية</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('financial')}
+          className={`flex items-center gap-2 px-4 py-2.5 font-bold text-sm border-b-2 transition-all shrink-0 ${
+            activeTab === 'financial'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Coins className="h-4 w-4" />
+          <span>العملة والضريبة والمستودع</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('receipt')}
+          className={`flex items-center gap-2 px-4 py-2.5 font-bold text-sm border-b-2 transition-all shrink-0 ${
+            activeTab === 'receipt'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Receipt className="h-4 w-4" />
+          <span>الفواتير والطباعة الحرارية</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('terminal')}
+          className={`flex items-center gap-2 px-4 py-2.5 font-bold text-sm border-b-2 transition-all shrink-0 ${
+            activeTab === 'terminal'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Smartphone className="h-4 w-4" />
+          <span>الجهاز والترخيص</span>
+        </button>
+      </div>
+
+      {/* Grid: Form on the right (2 spans), Live Preview on the left (1 span) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column (2 spans): Business Identity & Receipt Preview */}
+        {/* Form Container */}
         <div className="lg:col-span-2 space-y-6">
-          {/* SECTION 1: Client Identity & Logo */}
-          <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
-                  <Building2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    هوية المنشأة وشعار المتجر
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    الشعار المخصص لمنشأتك الذي يظهر في شاشات الكاشير والفواتير المطبوعة.
-                  </p>
-                </div>
+          {/* TAB 1: General Info & Branding */}
+          {activeTab === 'general' && (
+            <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-bold text-base text-slate-900">هوية وبيانات المنشأة</h3>
+                <span className="text-xs text-slate-500">كود المنشأة: <strong className="font-mono text-slate-800">{client?.client_code}</strong></span>
               </div>
 
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                <span>كود المنشأة:</span>
-                <span className="font-mono">{client?.client_code || '---'}</span>
-              </span>
-            </div>
-
-            {/* Logo Display Card */}
-            <div className="p-5 bg-slate-50/70 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center gap-6">
-              <div className="h-28 w-28 rounded-2xl bg-white border-2 border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
-                {client?.logo ? (
-                  <img
-                    src={client.logo}
-                    alt={client.business_name || 'شعار المنشأة'}
-                    className="h-full w-full object-contain p-2"
-                    referrerPolicy="no-referrer"
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    اسم المنشأة التجاري (يظهر على شاشات الكاشير والفواتير) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={businessName}
+                    onChange={(e) => setBusinessName(e.target.value)}
+                    placeholder="مثال: البركة ستور"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white"
                   />
-                ) : (
-                  <div className="text-center p-2 text-slate-400">
-                    <Store className="h-8 w-8 mx-auto mb-1 text-slate-300" />
-                    <span className="text-[10px]">لا يوجد شعار</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2 text-center sm:text-right flex-1">
-                <div className="flex items-center gap-2 justify-center sm:justify-start">
-                  <h3 className="text-lg font-bold text-slate-900">
-                    {client?.business_name || 'منشأة العميل'}
-                  </h3>
-                  {client?.logo ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                      شعار مخصص نشط
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                      افتراضي
-                    </span>
-                  )}
                 </div>
 
-                <p className="text-xs text-slate-600">
-                  الاسم التجاري المسجل: <span className="font-semibold text-slate-800">{client?.customer_name || '---'}</span>
-                </p>
-
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  يتم تطبيق هذا الشعار تلقائياً على واجهات الكاشير (POS Top Bar)، ترويسة الفواتير الحرارية، وكشوف الحسابات.
-                </p>
-              </div>
-            </div>
-
-            {/* Architecture Separation Guidance */}
-            <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 text-xs text-indigo-950 flex items-start gap-3 leading-relaxed">
-              <Info className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold text-indigo-900 block mb-0.5">
-                  فصل الهوية التقنية (Ordexa Platform vs. Client Brand):
-                </span>
-                <span className="text-slate-600">
-                  شعار منشأتك مستقل تماماً عن أيقونة تطبيق Windows الأساسية لـ Ordexa POS. يتميز هذا الفصل بضمان سرعة تثبيت التحديثات الدورية دون الحاجة لإعادة بناء ملفات التثبيت لكل عميل على حدة.
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION 2: Live Receipt Branding Preview */}
-          <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
-                  <Receipt className="h-5 w-5 text-indigo-600" />
-                </div>
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    معاينة ظهور الشعار على الفاتورة الحرارية
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    محاكاة مطابقة لشكل الشعار وبيانات المنشأة عند الطباعة المباشرة.
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    الاسم القانوني / المسجل
+                  </label>
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="مثال: مؤسسة البركة للتجارة"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    اسم المالك أو المسؤول
+                  </label>
+                  <input
+                    type="text"
+                    value={ownerName}
+                    onChange={(e) => setOwnerName(e.target.value)}
+                    placeholder="مثال: أحمد محمد"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    رقم الهاتف الرئيسي
+                  </label>
+                  <input
+                    type="text"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+20 100 000 0000"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 ltr text-left focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    البريد الإلكتروني الرسمي
+                  </label>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="info@business.com"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 ltr text-left focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    العنوان / الموقع الجغرافي
+                  </label>
+                  <input
+                    type="text"
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="مثال: القاهرة - المعادي - شارع 9"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    رابط الشعار المخصص (Logo URL)
+                  </label>
+                  <input
+                    type="url"
+                    value={logo}
+                    onChange={(e) => setLogo(e.target.value)}
+                    placeholder="https://example.com/logo.png"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 ltr text-left focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    يمكنك إدخال رابط مباشر لشعار المنشأة ليظهر أعلى الفاتورة الحرارية وشريط الكاشير.
                   </p>
                 </div>
               </div>
+            </div>
+          )}
 
-              <div className="flex items-center gap-1.5 self-start sm:self-auto bg-slate-100 p-1 rounded-xl">
-                <button
-                  type="button"
-                  onClick={() => setReceiptWidth('80mm')}
-                  className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors ${
-                    receiptWidth === '80mm'
-                      ? 'bg-white text-indigo-700 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  مقاس 80mm
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReceiptWidth('58mm')}
-                  className={`px-3 py-1 text-xs font-semibold rounded-lg transition-colors ${
-                    receiptWidth === '58mm'
-                      ? 'bg-white text-indigo-700 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  مقاس 58mm
-                </button>
+          {/* TAB 2: Financial, Tax & Warehouse */}
+          {activeTab === 'financial' && (
+            <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-bold text-base text-slate-900">إعدادات العملة، الضريبة، والمستودع</h3>
+                <span className="text-xs text-slate-500">ضبط العملة المعتمدة للنظام</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    العملة الأساسية للنظام *
+                  </label>
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 font-bold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  >
+                    {supportedCurrencies.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name} ({c.symbol}) - {c.code}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    العملة المحددة ستطبق على كافة الفواتير، أسعار البيع، والتقارير المالية.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    لغة النظام الافتراضية
+                  </label>
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  >
+                    <option value="ar">العربية (Arabic)</option>
+                    <option value="en">English (الإنجليزية)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    الرقم الضريبي للمنشأة (Tax / VAT Number)
+                  </label>
+                  <input
+                    type="text"
+                    value={taxNumber}
+                    onChange={(e) => setTaxNumber(e.target.value)}
+                    placeholder="مثال: 300123456700003"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 ltr text-left focus:outline-none focus:border-indigo-500 focus:bg-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    نسبة الضريبة الافتراضية (%)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                      placeholder="14"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 font-mono font-bold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                    />
+                    <span className="absolute inset-y-0 end-0 pe-3.5 flex items-center text-slate-400 font-bold">%</span>
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    المستودع / الفرع الافتراضي لنقاط البيع
+                  </label>
+                  <select
+                    value={defaultWarehouseId}
+                    onChange={(e) => setDefaultWarehouseId(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  >
+                    <option value="">-- اختر المستودع الافتراضي --</option>
+                    {warehouses.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} {w.is_primary ? '(الرئيسي)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
+          )}
 
-            {/* Receipt Preview Paper */}
-            <div className="bg-slate-100/70 p-6 rounded-2xl flex justify-center">
+          {/* TAB 3: Receipt & Printing Settings */}
+          {activeTab === 'receipt' && (
+            <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-bold text-base text-slate-900">إعدادات الفواتير الحرارية والطباعة</h3>
+                <span className="text-xs text-slate-500">تخصيص ترويسة وتذييل الفاتورة</span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    عرض ورقة الطباعة الافتراضي
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPaperSize('80mm')}
+                      className={`flex-1 py-2.5 px-4 rounded-xl border text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                        paperSize === '80mm'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Receipt className="h-4 w-4" />
+                      <span>مقاس 80 مم (Thermal Standard)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaperSize('58mm')}
+                      className={`flex-1 py-2.5 px-4 rounded-xl border text-sm font-bold transition-all flex items-center justify-center gap-2 ${
+                        paperSize === '58mm'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Receipt className="h-4 w-4" />
+                      <span>مقاس 58 مم (Compact Thermal)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    ترويسة الفاتورة المخصصة (Receipt Header Text)
+                  </label>
+                  <input
+                    type="text"
+                    value={receiptHeader}
+                    onChange={(e) => setReceiptHeader(e.target.value)}
+                    placeholder="مثال: أهلاً بكم في متجرنا • سجل تجاري 123456"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    تذييل الفاتورة (Receipt Footer Note)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={receiptFooter}
+                    onChange={(e) => setReceiptFooter(e.target.value)}
+                    placeholder="مثال: البضاعة المباعة ترد وتستبدل خلال 14 يوماً بموجب الفاتورة."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: Terminal & License Info */}
+          {activeTab === 'terminal' && (
+            <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-bold text-base text-slate-900">بيانات الترخيص والجهاز</h3>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                  effectiveLicenseStatus === 'active'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-700 border border-amber-200'
+                }`}>
+                  {effectiveLicenseStatus === 'active' ? 'مرخص ونشط' : effectiveLicenseStatus}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                  <span className="text-slate-400 block">مفتاح الترخيص</span>
+                  <span className="font-mono font-bold text-slate-900 text-sm ltr text-left block">
+                    {license?.license_key || 'LIC-ORD-UNREGISTERED'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                  <span className="text-slate-400 block">نوع الباقة</span>
+                  <span className="font-bold text-slate-900 text-sm capitalize">
+                    {license?.license_type || 'Enterprise / Ultimate'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                  <span className="text-slate-400 block">تاريخ انتهاء الاشتراك</span>
+                  <span className="font-bold text-slate-900 text-sm">
+                    {license?.expiry_date ? format(new Date(license.expiry_date), 'yyyy-MM-dd') : 'دائم / غير محدد'}
+                  </span>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                  <span className="text-slate-400 block">الأجهزة المفعلة</span>
+                  <span className="font-bold text-slate-900 text-sm">
+                    {license?.activated_devices || 1} من {license?.max_devices || 10} أجهزة
+                  </span>
+                </div>
+
+                <div className="sm:col-span-2 p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                  <span className="text-slate-400 block">بصمة الجهاز الرقمية (Device Fingerprint)</span>
+                  <span className="font-mono text-xs text-indigo-700 ltr text-left block select-all">
+                    {fingerprint}
+                  </span>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {operatingSystem} • {isDesktopNative ? 'تطبيق Windows مكتبي' : 'بيئة الويب / PWA'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Save Action */}
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => handleSave()}
+              disabled={saving}
+              className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-600/20 transition-all disabled:opacity-50"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="animate-spin h-4 w-4" />
+                  <span>جارٍ حفظ التغييرات...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  <span>حفظ وتطبيق الإعدادات</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Live Thermal Receipt Preview */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl p-5 shadow-xs border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <Receipt className="h-4 w-4 text-indigo-600" />
+                <span>معاينة حية للفاتورة المطبوعة</span>
+              </div>
+              <span className="text-[11px] font-mono text-slate-400">{paperSize}</span>
+            </div>
+
+            {/* Paper rendering */}
+            <div className="bg-slate-100 p-4 rounded-xl flex justify-center">
               <div
-                className={`bg-white rounded-xl border border-slate-300 p-5 shadow-xs font-mono text-center space-y-2 transition-all ${
-                  receiptWidth === '80mm' ? 'w-[320px] text-xs' : 'w-[250px] text-[11px]'
+                className={`bg-white rounded-lg border border-slate-300 p-4 font-mono text-center space-y-2 shadow-xs transition-all ${
+                  paperSize === '80mm' ? 'w-[280px] text-xs' : 'w-[220px] text-[11px]'
                 }`}
               >
-                {client?.logo ? (
+                {logo ? (
                   <div className="flex justify-center mb-1">
                     <img
-                      src={client.logo}
-                      alt={client.business_name}
-                      className="h-12 w-auto max-w-[140px] object-contain"
+                      src={logo}
+                      alt={businessName}
+                      className="h-10 w-auto max-w-[120px] object-contain"
                       referrerPolicy="no-referrer"
                     />
                   </div>
                 ) : (
-                  <div className="py-2 border-b border-dashed border-slate-200 text-slate-400 text-[10px]">
+                  <div className="py-1.5 border-b border-dashed border-slate-200 text-slate-400 text-[10px]">
                     [شعار المنشأة]
                   </div>
                 )}
-                <h4 className="font-extrabold text-slate-900 text-sm">{client?.business_name || 'اسم المتجر'}</h4>
-                {client?.phone && <p className="text-slate-500 text-[11px]" dir="ltr">{client.phone}</p>}
-                {client?.address && <p className="text-slate-500 text-[10px]">{client.address}</p>}
 
-                <div className="border-t border-b border-dashed border-slate-300 py-1.5 my-2">
+                <h4 className="font-extrabold text-slate-900 text-sm">{businessName || 'اسم المنشأة'}</h4>
+                {receiptHeader && <p className="text-slate-600 text-[10px]">{receiptHeader}</p>}
+                {phone && <p className="text-slate-500 text-[10px]" dir="ltr">{phone}</p>}
+                {address && <p className="text-slate-500 text-[10px]">{address}</p>}
+                {taxNumber && <p className="text-slate-500 text-[10px]">الرقم الضريبي: {taxNumber}</p>}
+
+                <div className="border-t border-b border-dashed border-slate-300 py-1 my-1">
                   <span className="font-bold text-slate-800 text-[11px]">فاتورة ضريبية مبسطة</span>
                 </div>
 
-                <div className="text-[10px] text-slate-400 space-y-1">
+                <div className="text-[10px] text-slate-500 space-y-0.5 text-right">
                   <div className="flex justify-between">
                     <span>رقم الفاتورة:</span>
-                    <span>INV-2026-0001</span>
+                    <span>INV-000123</span>
                   </div>
                   <div className="flex justify-between">
                     <span>التاريخ:</span>
@@ -219,114 +679,20 @@ export function ClientSettings() {
                   </div>
                 </div>
 
-                <div className="border-t border-dashed border-slate-300 pt-2 text-[10px] text-slate-400">
-                  شكراً لزيارتكم • مدعوم بنظام Ordexa POS
+                <div className="border-t border-dashed border-slate-300 pt-1 text-[10px]">
+                  <div className="flex justify-between font-bold">
+                    <span>الإجمالي:</span>
+                    <span>150.00 {currency}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-500 text-[9px]">
+                    <span>شامل الضريبة ({taxRate}%):</span>
+                    <span>{((150 * taxRate) / (100 + taxRate)).toFixed(2)} {currency}</span>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Right Column (1 span): License & Terminal Info */}
-        <div className="space-y-6">
-          {/* License Status Card */}
-          <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Key className="h-5 w-5 text-indigo-600" />
-                <h3 className="text-sm font-bold text-slate-900">حالة الترخيص</h3>
-              </div>
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                effectiveLicenseStatus === 'active'
-                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                  : 'bg-amber-50 text-amber-700 border border-amber-200'
-              }`}>
-                {effectiveLicenseStatus === 'active' ? 'نشط ومرخص' : effectiveLicenseStatus}
-              </span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <span className="text-slate-400 block mb-0.5">مفتاح الترخيص (License Key)</span>
-                <span className="font-mono font-bold text-slate-800 text-[11px] bg-slate-50 px-2 py-1 rounded-lg border border-slate-200 block ltr text-left truncate">
-                  {license?.license_key || 'LIC-ORD-UNREGISTERED'}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-400 block mb-0.5">نوع الباقة / الترخيص</span>
-                <span className="font-bold text-slate-800 capitalize">
-                  {license?.license_type || 'Ultimate POS'}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-400 block mb-0.5">تاريخ الانتهاء</span>
-                <span className="font-medium text-slate-700">
-                  {license?.expiry_date ? format(new Date(license.expiry_date), 'yyyy-MM-dd') : 'دائم / سنوي'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Terminal / Device Info */}
-          <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Smartphone className="h-5 w-5 text-indigo-600" />
-                <h3 className="text-sm font-bold text-slate-900">جهاز الكاشير الحالي</h3>
-              </div>
-              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[11px] font-mono">
-                Terminal 01
-              </span>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <span className="text-slate-400 block mb-0.5">بصمة الجهاز (Device Fingerprint)</span>
-                <span className="font-mono text-[10px] text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-200 block ltr text-left truncate" title={fingerprint || 'FP-ORDEXA-DEFAULT-MACHINE'}>
-                  {fingerprint || 'FP-ORDEXA-DEFAULT-MACHINE'}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-400 block mb-0.5">اسم الجهاز بالنظام</span>
-                <span className="font-bold text-slate-800">
-                  {deviceName || 'Ordexa POS Station'}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-400 block mb-0.5">نظام التشغيل والبيئة</span>
-                <div className="flex items-center gap-1.5 text-slate-700">
-                  <Monitor className="h-4 w-4 text-indigo-600" />
-                  <span>{operatingSystem || 'Windows 10/11'} • {isDesktopNative ? 'تطبيق Windows مكتبي' : 'بيئة الويب المستعرضة'}</span>
+                <div className="border-t border-dashed border-slate-300 pt-2 text-[9px] text-slate-500">
+                  {receiptFooter || 'شكراً لزيارتكم • نسعد بخدمتكم دائماً'}
                 </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Contact Details */}
-          <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-3 text-xs">
-            <h4 className="font-bold text-slate-900 border-b border-slate-100 pb-2">
-              بيانات التواصل المسجلة
-            </h4>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-slate-600">
-                <Phone className="h-4 w-4 text-slate-400" />
-                <span className="font-mono ltr">{client?.phone || '---'}</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-600">
-                <Mail className="h-4 w-4 text-slate-400" />
-                <span className="font-mono ltr truncate">{client?.email || '---'}</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-600">
-                <MapPin className="h-4 w-4 text-slate-400" />
-                <span>{client?.address || '---'}</span>
-              </div>
-              <div className="flex items-center gap-2 text-slate-600">
-                <Coins className="h-4 w-4 text-slate-400" />
-                <span>العملة: {client?.currency || 'USD'}</span>
               </div>
             </div>
           </div>

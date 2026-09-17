@@ -24,7 +24,7 @@ import toast from 'react-hot-toast';
 
 export function ExpensesPage() {
   const { client } = useClientStore();
-  const { currentShift } = useShiftStore();
+  const { activeShift: currentShift } = useShiftStore();
   const { formatPrice } = useCurrency();
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
