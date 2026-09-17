@@ -133,7 +133,20 @@ export async function provisionUserViaApi(
       body: JSON.stringify(input),
     });
 
-    const data = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    let data: any = null;
+
+    if (contentType.includes('application/json')) {
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        console.warn('Failed to parse JSON response:', jsonErr);
+      }
+    } else {
+      const rawText = await response.text().catch(() => '');
+      console.warn('Backend API returned non-JSON response:', response.status, rawText.slice(0, 150));
+    }
+
     if (response.ok && data?.success) {
       return {
         user: data.user as ClientUser,
@@ -142,7 +155,27 @@ export async function provisionUserViaApi(
       };
     }
 
-    throw new Error(data?.error || 'تعذر إنشاء الحساب');
+    if (data?.error) {
+      throw new Error(data.error);
+    }
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('خدمة تهيئة المستخدمين غير متاحة حالياً (رمز 404). يرجى التأكد من اتصال الخادم.');
+      }
+      if (response.status === 401) {
+        throw new Error('غير مصرح: يلزم تسجيل الدخول كمسؤول سوبر أدمن للمتابعة.');
+      }
+      if (response.status === 403) {
+        throw new Error('ممنوع الوصول: لا تملك الصلاحيات الكافية لإضافة مستخدم لهذه المنشأة.');
+      }
+      if (response.status === 409) {
+        throw new Error('البريد الإلكتروني مسجل بالفعل لدى مستخدم أو منشأة أخرى.');
+      }
+      throw new Error(`تعذر إنشاء الحساب من الخادم (رمز الاستجابة: ${response.status}).`);
+    }
+
+    throw new Error('استجابة غير متوقعة من خادم النظام. يرجى إعادة المحاولة.');
   } catch (err: any) {
     console.warn('Provision via API failed, falling back to direct DB record:', err);
     throw err;
