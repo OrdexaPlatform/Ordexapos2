@@ -3,6 +3,7 @@ import { Store, DollarSign, AlertCircle, X, Laptop } from 'lucide-react';
 import { useShiftStore } from '../../../store/shiftStore';
 import { useAuthStore } from '../../../store/authStore';
 import { useDeviceStore } from '../../../store/deviceStore';
+import { useCurrency } from '../../../hooks/useCurrency';
 import { warehouseService } from '../../../lib/warehouseService';
 import { shiftService } from '../../../lib/shiftService';
 import { Warehouse, CashRegister } from '../../../types';
@@ -23,6 +24,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
   const clientId = clientUser?.client_id;
   const { openShift, isLoading } = useShiftStore();
   const { fingerprint, deviceName, isActivated, device } = useDeviceStore();
+  const { currencySymbol, currencyName } = useCurrency();
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [registers, setRegisters] = useState<CashRegister[]>([]);
@@ -208,7 +210,9 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
               <label className="text-xs font-semibold text-slate-700">
                 الرصيد الافتتاحي في الدرج (العهدة النقدية) <span className="text-rose-500">*</span>
               </label>
-              <span className="text-[11px] text-slate-400">ريال سعودي</span>
+              <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                {currencyName} ({currencySymbol})
+              </span>
             </div>
             <div className="relative">
               <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
@@ -237,7 +241,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
                   onClick={() => addCashAmount(amt)}
                   className="flex-1 py-1.5 px-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                 >
-                  +{amt}
+                  +{amt} {currencySymbol}
                 </button>
               ))}
               <button
@@ -260,7 +264,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
               rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="مثال: استلام العهدة كاملة فئات 100 و 50 ريال..."
+              placeholder={`مثال: استلام العهدة كاملة فئات 100 و 50 ${currencySymbol}...`}
               className="w-full p-3 text-sm text-slate-800 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none"
             />
           </div>

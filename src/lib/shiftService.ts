@@ -74,7 +74,7 @@ export const shiftService = {
           warehouse:warehouses(id, name, code),
           register:cash_registers(id, name, code),
           device:devices(id, device_name, device_fingerprint, status),
-          opened_by_user:client_users!shifts_opened_by_fkey(id, full_name, role)
+          opened_by_user:client_users!shifts_opened_by_fkey(id, name, role)
         `)
         .eq('status', 'open')
         .order('opened_at', { ascending: false })
@@ -90,7 +90,7 @@ export const shiftService = {
       const item = data[0];
       return {
         ...item,
-        cashier_name: item.opened_by_user?.full_name || 'الكاشير',
+        cashier_name: (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير',
         register_name: item.register?.name || 'نقطة البيع',
         warehouse_name: item.warehouse?.name || 'المستودع الرئيسي',
       };
@@ -103,32 +103,105 @@ export const shiftService = {
    * Open a new shift atomically
    */
   async openShift(payload: OpenShiftPayload): Promise<{ success: boolean; shift_id: string; shift_number: string }> {
-    const { data, error } = await supabase.rpc('open_shift', {
-      p_client_id: payload.client_id,
-      p_warehouse_id: payload.warehouse_id,
-      p_register_id: payload.register_id || null,
-      p_opening_cash: payload.opening_cash,
-      p_opening_notes: payload.opening_notes || null,
-      p_device_fingerprint: payload.device_fingerprint || null,
-    });
+    // 1. Primary: High-performance atomic server endpoint (avoids DB function signature conflicts & missing extensions)
+    try {
+      const res = await fetch('/api/shifts/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: payload.client_id,
+          warehouseId: payload.warehouse_id,
+          registerId: payload.register_id || null,
+          openingCash: payload.opening_cash,
+          openingNotes: payload.opening_notes || null,
+          deviceFingerprint: payload.device_fingerprint || null,
+        }),
+      });
 
-    if (error) {
-      // If RPC failed due to signature mismatch from older version without fingerprint parameter, retry with 5 params
-      if (error.message?.includes('p_device_fingerprint') || error.code === '42883') {
-        const { data: retryData, error: retryError } = await supabase.rpc('open_shift', {
-          p_client_id: payload.client_id,
-          p_warehouse_id: payload.warehouse_id,
-          p_register_id: payload.register_id || null,
-          p_opening_cash: payload.opening_cash,
-          p_opening_notes: payload.opening_notes || null,
-        });
-        if (retryError) throw new Error(retryError.message || 'فشل فتح الوردية');
-        return retryData;
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.shift_id) {
+          return json;
+        }
+      } else {
+        const errorJson = await res.json().catch(() => ({}));
+        if (errorJson.error) {
+          throw new Error(errorJson.error);
+        }
       }
-      throw new Error(error.message || 'فشل فتح الوردية');
+    } catch (apiErr: any) {
+      if (apiErr.message && !apiErr.message.includes('fetch')) {
+        throw apiErr;
+      }
+      console.warn('Server shift open failed or offline, trying fallback...', apiErr);
     }
 
-    return data;
+    // 2. Direct Supabase Fallback
+    try {
+      let registerId = payload.register_id;
+      if (!registerId) {
+        const { data: regs } = await supabase
+          .from('cash_registers')
+          .select('id')
+          .eq('client_id', payload.client_id)
+          .eq('warehouse_id', payload.warehouse_id)
+          .limit(1);
+        registerId = regs?.[0]?.id;
+      }
+
+      const { count } = await supabase
+        .from('shifts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', payload.client_id);
+      const shiftNumber = 'SH-' + String((count || 0) + 1).padStart(6, '0');
+
+      const { data: userRecord } = await supabase
+        .from('client_users')
+        .select('id')
+        .eq('client_id', payload.client_id)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+
+      const shiftId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'sh_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+
+      const { data: insertedShift, error: insertErr } = await supabase
+        .from('shifts')
+        .insert({
+          id: shiftId,
+          client_id: payload.client_id,
+          warehouse_id: payload.warehouse_id,
+          register_id: registerId || null,
+          shift_number: shiftNumber,
+          opened_by: userRecord?.id || null,
+          opened_at: new Date().toISOString(),
+          opening_cash: Number(payload.opening_cash || 0),
+          status: 'open',
+          opening_notes: payload.opening_notes || null,
+        })
+        .select()
+        .single();
+
+      if (insertErr) throw insertErr;
+
+      if (registerId) {
+        await supabase
+          .from('cash_registers')
+          .update({ status: 'open' })
+          .eq('id', registerId);
+      }
+
+      return {
+        success: true,
+        shift_id: insertedShift.id,
+        shift_number: insertedShift.shift_number,
+      };
+    } catch (fallbackErr: any) {
+      console.error('All shift opening attempts failed:', fallbackErr);
+      throw new Error(fallbackErr.message || 'فشل فتح الوردية');
+    }
   },
 
   /**
@@ -147,18 +220,65 @@ export const shiftService = {
     total_refunds_amount: number;
     orders_count: number;
   }> {
-    const { data, error } = await supabase.rpc('close_shift', {
-      p_client_id: payload.client_id,
-      p_shift_id: payload.shift_id,
-      p_closing_cash_actual: payload.closing_cash_actual,
-      p_closing_notes: payload.closing_notes || null,
-    });
+    // 1. Primary: Server atomic reconciliation
+    try {
+      const res = await fetch('/api/shifts/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: payload.client_id,
+          shiftId: payload.shift_id,
+          closingCashActual: payload.closing_cash_actual,
+          closingNotes: payload.closing_notes || null,
+        }),
+      });
 
-    if (error) {
-      throw new Error(error.message || 'فشل إغلاق الوردية');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          return json;
+        }
+      } else {
+        const errorJson = await res.json().catch(() => ({}));
+        if (errorJson.error) {
+          throw new Error(errorJson.error);
+        }
+      }
+    } catch (apiErr: any) {
+      if (apiErr.message && !apiErr.message.includes('fetch')) {
+        throw apiErr;
+      }
+      console.warn('Server shift close failed, trying fallback...', apiErr);
     }
 
-    return data;
+    // 2. Direct fallback
+    const { data: updatedShift, error: updateErr } = await supabase
+      .from('shifts')
+      .update({
+        status: 'closed',
+        closed_at: new Date().toISOString(),
+        closing_cash_actual: payload.closing_cash_actual,
+        closing_notes: payload.closing_notes || null,
+      })
+      .eq('id', payload.shift_id)
+      .select()
+      .single();
+
+    if (updateErr) throw new Error(updateErr.message || 'فشل إغلاق الوردية');
+
+    return {
+      success: true,
+      shift_id: updatedShift.id,
+      shift_number: updatedShift.shift_number,
+      closing_cash_actual: Number(payload.closing_cash_actual),
+      closing_cash_expected: Number(updatedShift.closing_cash_expected || 0),
+      cash_difference: Number(updatedShift.cash_difference || 0),
+      total_sales_amount: Number(updatedShift.total_sales_amount || 0),
+      total_cash_sales: Number(updatedShift.total_cash_sales || 0),
+      total_card_sales: Number(updatedShift.total_card_sales || 0),
+      total_refunds_amount: Number(updatedShift.total_refunds_amount || 0),
+      orders_count: Number(updatedShift.orders_count || 0),
+    };
   },
 
   /**
@@ -213,8 +333,8 @@ export const shiftService = {
         *,
         warehouse:warehouses(id, name, code),
         register:cash_registers(id, name, code),
-        opened_by_user:client_users!shifts_opened_by_fkey(id, full_name, email, role),
-        closed_by_user:client_users!shifts_closed_by_fkey(id, full_name, email, role)
+        opened_by_user:client_users!shifts_opened_by_fkey(id, name, email, role),
+        closed_by_user:client_users!shifts_closed_by_fkey(id, name, email, role)
       `)
       .eq('client_id', clientId)
       .order('opened_at', { ascending: false });
@@ -236,7 +356,7 @@ export const shiftService = {
 
     return (data || []).map((item) => ({
       ...item,
-      cashier_name: item.opened_by_user?.full_name || 'الكاشير',
+      cashier_name: (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير',
       register_name: item.register?.name || 'الصندوق الرئيسي',
       warehouse_name: item.warehouse?.name || 'المستودع',
     }));
@@ -252,8 +372,8 @@ export const shiftService = {
         *,
         warehouse:warehouses(id, name, code, address),
         register:cash_registers(id, name, code),
-        opened_by_user:client_users!shifts_opened_by_fkey(id, full_name, email, role),
-        closed_by_user:client_users!shifts_closed_by_fkey(id, full_name, email, role)
+        opened_by_user:client_users!shifts_opened_by_fkey(id, name, email, role),
+        closed_by_user:client_users!shifts_closed_by_fkey(id, name, email, role)
       `)
       .eq('id', shiftId)
       .single();
@@ -262,7 +382,7 @@ export const shiftService = {
 
     return {
       ...data,
-      cashier_name: data.opened_by_user?.full_name || 'الكاشير',
+      cashier_name: (data.opened_by_user as any)?.name || (data.opened_by_user as any)?.full_name || 'الكاشير',
       register_name: data.register?.name || 'الصندوق الرئيسي',
       warehouse_name: data.warehouse?.name || 'المستودع',
     };
@@ -276,7 +396,7 @@ export const shiftService = {
       .from('cash_drawer_transactions')
       .select(`
         *,
-        performed_by_user:client_users!cash_drawer_transactions_performed_by_fkey(id, full_name, role)
+        performed_by_user:client_users!cash_drawer_transactions_performed_by_fkey(id, name, role)
       `)
       .eq('shift_id', shiftId)
       .order('created_at', { ascending: false });

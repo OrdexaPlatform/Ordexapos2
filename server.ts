@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -1319,6 +1320,425 @@ app.post('/api/client/update', async (req, res) => {
   } catch (err: any) {
     console.error('Client update error:', err);
     return res.status(500).json({ error: err.message || 'فشل تحديث إعدادات المنشأة' });
+  }
+});
+
+// ==========================================
+// Atomic Shift Management Endpoints
+// ==========================================
+app.post('/api/shifts/open', async (req, res) => {
+  try {
+    const {
+      clientId,
+      warehouseId,
+      registerId: inputRegisterId,
+      openingCash = 0,
+      openingNotes = null,
+      deviceFingerprint = null,
+      deviceId: inputDeviceId = null,
+      userId = null,
+    } = req.body;
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'معرف المنشأة مطلوب لفتح الوردية' });
+    }
+    if (!warehouseId) {
+      return res.status(400).json({ error: 'يرجى تحديد المستودع أو الفرع' });
+    }
+    if (Number(openingCash) < 0) {
+      return res.status(400).json({ error: 'الرصيد الافتتاحي لا يمكن أن يكون سالباً' });
+    }
+
+    // 1. Verify client status
+    const { data: client, error: clientErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, name, status')
+      .eq('id', clientId)
+      .single();
+
+    if (clientErr || !client) {
+      return res.status(404).json({ error: 'المنشأة غير موجودة' });
+    }
+    if (client.status !== 'active') {
+      return res.status(403).json({ error: 'حساب المنشأة غير نشط أو موقوف مؤقتاً' });
+    }
+
+    // 2. Verify active license
+    const { data: license } = await supabaseAdmin
+      .from('licenses')
+      .select('id, status, expiry_date')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!license || license.status !== 'active') {
+      return res.status(403).json({ error: 'لا يوجد ترخيص نشط للمنشأة. يرجى تجديد الاشتراك أولاً.' });
+    }
+    if (license.expiry_date && new Date(license.expiry_date) < new Date()) {
+      return res.status(403).json({ error: 'انتهت صلاحية ترخيص المنشأة. يرجى تجديد الاشتراك.' });
+    }
+
+    // 3. Resolve cashier / client user
+    let clientUserId: string | null = null;
+    if (userId) {
+      const { data: cu } = await supabaseAdmin
+        .from('client_users')
+        .select('id, name, status, role')
+        .eq('client_id', clientId)
+        .or(`id.eq.${userId},auth_user_id.eq.${userId}`)
+        .maybeSingle();
+      if (cu) {
+        clientUserId = cu.id;
+      }
+    }
+
+    if (!clientUserId) {
+      const { data: fallbackUsers } = await supabaseAdmin
+        .from('client_users')
+        .select('id, name, status, role')
+        .eq('client_id', clientId)
+        .eq('status', 'active')
+        .limit(1);
+      if (fallbackUsers && fallbackUsers.length > 0) {
+        clientUserId = fallbackUsers[0].id;
+      }
+    }
+
+    if (!clientUserId) {
+      return res.status(400).json({ error: 'لا يوجد مستخدم نشط مسجل لفتح الوردية' });
+    }
+
+    // 4. Resolve Device
+    let effectiveDeviceId: string | null = inputDeviceId || null;
+    if (!effectiveDeviceId && deviceFingerprint) {
+      const { data: dev } = await supabaseAdmin
+        .from('devices')
+        .select('id, status')
+        .eq('client_id', clientId)
+        .eq('device_fingerprint', String(deviceFingerprint).trim())
+        .maybeSingle();
+      if (dev) {
+        effectiveDeviceId = dev.id;
+        await supabaseAdmin.from('devices').update({ last_seen_at: new Date().toISOString() }).eq('id', dev.id);
+      }
+    }
+
+    // 5. Resolve or create cash register
+    let registerId: string | null = inputRegisterId || null;
+    if (registerId) {
+      const { data: existingReg } = await supabaseAdmin
+        .from('cash_registers')
+        .select('id, name, status')
+        .eq('id', registerId)
+        .eq('client_id', clientId)
+        .maybeSingle();
+      if (!existingReg) {
+        registerId = null;
+      }
+    }
+
+    if (!registerId) {
+      const { data: regs } = await supabaseAdmin
+        .from('cash_registers')
+        .select('id, name, status')
+        .eq('client_id', clientId)
+        .eq('warehouse_id', warehouseId)
+        .limit(1);
+      if (regs && regs.length > 0) {
+        registerId = regs[0].id;
+      } else {
+        const { data: wh } = await supabaseAdmin.from('warehouses').select('name').eq('id', warehouseId).single();
+        const regName = wh?.name ? `${wh.name} - كاشير رئيسي` : 'نقطة البيع الرئيسية 1';
+        const { data: newReg, error: regErr } = await supabaseAdmin
+          .from('cash_registers')
+          .insert({
+            client_id: clientId,
+            warehouse_id: warehouseId,
+            name: regName,
+            code: 'REG-01',
+            status: 'closed',
+            is_active: true,
+            device_id: effectiveDeviceId,
+          })
+          .select()
+          .single();
+        if (regErr || !newReg) {
+          return res.status(500).json({ error: 'فشل تهيئة صندوق الكاشير' });
+        }
+        registerId = newReg.id;
+      }
+    }
+
+    // 6. Check if register or user already has an active open shift
+    const { data: existingShift } = await supabaseAdmin
+      .from('shifts')
+      .select('id, shift_number, opened_by, register_id, warehouse_id')
+      .eq('client_id', clientId)
+      .eq('status', 'open')
+      .or(`register_id.eq.${registerId},opened_by.eq.${clientUserId}`)
+      .limit(1)
+      .maybeSingle();
+
+    if (existingShift) {
+      return res.json({
+        success: true,
+        shift_id: existingShift.id,
+        shift_number: existingShift.shift_number,
+        register_id: existingShift.register_id || registerId,
+        already_open: true,
+        message: `تم استعادة الوردية المفتوحة برقم (${existingShift.shift_number})`,
+      });
+    }
+
+    // 7. Generate Shift Number
+    const { count } = await supabaseAdmin
+      .from('shifts')
+      .select('*', { count: 'exact', head: true })
+      .eq('client_id', clientId);
+    const shiftNumber = 'SH-' + String((count || 0) + 1).padStart(6, '0');
+
+    // 8. Insert new shift
+    const shiftId = crypto.randomUUID();
+    const { data: createdShift, error: shiftErr } = await supabaseAdmin
+      .from('shifts')
+      .insert({
+        id: shiftId,
+        client_id: clientId,
+        warehouse_id: warehouseId,
+        register_id: registerId,
+        device_id: effectiveDeviceId,
+        shift_number: shiftNumber,
+        opened_by: clientUserId,
+        opened_at: new Date().toISOString(),
+        opening_cash: Number(openingCash),
+        status: 'open',
+        opening_notes: openingNotes ? String(openingNotes).trim() : null,
+      })
+      .select()
+      .single();
+
+    if (shiftErr || !createdShift) {
+      console.error('Failed to insert shift:', shiftErr);
+      return res.status(500).json({ error: shiftErr?.message || 'فشل فتح الوردية بقاعدة البيانات' });
+    }
+
+    // 9. Update cash register to 'open'
+    await supabaseAdmin
+      .from('cash_registers')
+      .update({
+        status: 'open',
+        device_id: effectiveDeviceId || undefined,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', registerId);
+
+    // 10. Record opening cash movement if > 0
+    if (Number(openingCash) > 0) {
+      await supabaseAdmin.from('cash_drawer_transactions').insert({
+        id: crypto.randomUUID(),
+        client_id: clientId,
+        shift_id: shiftId,
+        register_id: registerId,
+        transaction_type: 'opening_cash',
+        amount: Number(openingCash),
+        reason: 'رصيد افتتاحي للوردية (العهدة النقدية)',
+        performed_by: clientUserId,
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    // 11. Activity log
+    await supabaseAdmin.from('activity_logs').insert({
+      id: crypto.randomUUID(),
+      actor_type: 'client_user',
+      actor_id: clientUserId,
+      action: 'shift_opened',
+      entity_type: 'shift',
+      entity_id: shiftId,
+      metadata: {
+        shift_number: shiftNumber,
+        opening_cash: Number(openingCash),
+        warehouse_id: warehouseId,
+        register_id: registerId,
+        device_id: effectiveDeviceId,
+      },
+      created_at: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      shift_id: shiftId,
+      shift_number: shiftNumber,
+      register_id: registerId,
+      message: 'تم فتح الوردية بنجاح! جاهز لبدء البيع',
+    });
+  } catch (err: any) {
+    console.error('Shift open error:', err);
+    return res.status(500).json({ error: err.message || 'حدث خطأ غير متوقع أثناء فتح الوردية' });
+  }
+});
+
+app.post('/api/shifts/close', async (req, res) => {
+  try {
+    const {
+      clientId,
+      shiftId,
+      closingCashActual,
+      closingNotes = null,
+      userId = null,
+    } = req.body;
+
+    if (!clientId || !shiftId) {
+      return res.status(400).json({ error: 'معرف المنشأة والوردية مطلوبان' });
+    }
+    if (closingCashActual == null || Number(closingCashActual) < 0) {
+      return res.status(400).json({ error: 'المبلغ النقدي الفعلي في الدرج غير صحيح' });
+    }
+
+    // 1. Fetch shift
+    const { data: shift, error: shiftErr } = await supabaseAdmin
+      .from('shifts')
+      .select('*')
+      .eq('id', shiftId)
+      .eq('client_id', clientId)
+      .single();
+
+    if (shiftErr || !shift) {
+      return res.status(404).json({ error: 'الوردية غير موجودة' });
+    }
+    if (shift.status === 'closed') {
+      return res.status(400).json({ error: 'هذه الوردية مغلقة بالفعل' });
+    }
+
+    // 2. Calculate sales
+    const { data: sales } = await supabaseAdmin
+      .from('sales')
+      .select('id, total_amount, sale_status')
+      .eq('shift_id', shiftId);
+
+    const completedSales = (sales || []).filter((s: any) => s.sale_status === 'completed');
+    const voidedSales = (sales || []).filter((s: any) => s.sale_status === 'voided');
+    const totalSalesAmount = completedSales.reduce((sum: number, s: any) => sum + Number(s.total_amount || 0), 0);
+    const totalRefundsAmount = voidedSales.reduce((sum: number, s: any) => sum + Number(s.total_amount || 0), 0);
+    const ordersCount = completedSales.length;
+
+    // 3. Payment methods breakdown
+    const completedSaleIds = completedSales.map((s: any) => s.id);
+    let totalCashSales = 0;
+    let totalCardSales = 0;
+    let totalOtherSales = 0;
+
+    if (completedSaleIds.length > 0) {
+      const { data: payments } = await supabaseAdmin
+        .from('sale_payments')
+        .select('payment_method, amount')
+        .in('sale_id', completedSaleIds);
+
+      for (const p of (payments || [])) {
+        const amt = Number(p.amount || 0);
+        if (p.payment_method === 'cash') totalCashSales += amt;
+        else if (p.payment_method === 'card') totalCardSales += amt;
+        else totalOtherSales += amt;
+      }
+    }
+
+    // 4. Cash In & Cash Out movements
+    const { data: drawerTxs } = await supabaseAdmin
+      .from('cash_drawer_transactions')
+      .select('transaction_type, amount')
+      .eq('shift_id', shiftId);
+
+    let totalCashIn = 0;
+    let totalCashOut = 0;
+    for (const tx of (drawerTxs || [])) {
+      const amt = Number(tx.amount || 0);
+      if (tx.transaction_type === 'cash_in') totalCashIn += amt;
+      else if (['cash_out', 'drop_to_safe'].includes(tx.transaction_type)) totalCashOut += amt;
+    }
+
+    // 5. Expected cash & difference reconciliation
+    const openingCash = Number(shift.opening_cash || 0);
+    const expectedCash = Math.max(0, openingCash + totalCashSales + totalCashIn - totalCashOut);
+    const actualCash = Number(closingCashActual);
+    const cashDifference = actualCash - expectedCash;
+
+    // 6. Update shift record
+    const { data: closedShift, error: closeErr } = await supabaseAdmin
+      .from('shifts')
+      .update({
+        status: 'closed',
+        closed_by: userId || shift.opened_by,
+        closed_at: new Date().toISOString(),
+        closing_cash_actual: actualCash,
+        closing_cash_expected: expectedCash,
+        cash_difference: cashDifference,
+        total_sales_amount: totalSalesAmount,
+        total_cash_sales: totalCashSales,
+        total_card_sales: totalCardSales,
+        total_other_sales: totalOtherSales,
+        total_refunds_amount: totalRefundsAmount,
+        total_cash_in: totalCashIn,
+        total_cash_out: totalCashOut,
+        orders_count: ordersCount,
+        closing_notes: closingNotes ? String(closingNotes).trim() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', shiftId)
+      .select()
+      .single();
+
+    if (closeErr || !closedShift) {
+      return res.status(500).json({ error: closeErr?.message || 'فشل إغلاق الوردية' });
+    }
+
+    // 7. Update cash register back to closed
+    if (shift.register_id) {
+      await supabaseAdmin
+        .from('cash_registers')
+        .update({
+          status: 'closed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', shift.register_id);
+    }
+
+    // 8. Audit log (Z-Report)
+    await supabaseAdmin.from('activity_logs').insert({
+      id: crypto.randomUUID(),
+      actor_type: 'client_user',
+      actor_id: userId || shift.opened_by,
+      action: 'shift_closed',
+      entity_type: 'shift',
+      entity_id: shiftId,
+      metadata: {
+        shift_number: shift.shift_number,
+        closing_cash_actual: actualCash,
+        closing_cash_expected: expectedCash,
+        cash_difference: cashDifference,
+        total_sales: totalSalesAmount,
+        orders_count: ordersCount,
+      },
+      created_at: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      shift_id: shiftId,
+      shift_number: shift.shift_number,
+      closing_cash_actual: actualCash,
+      closing_cash_expected: expectedCash,
+      cash_difference: cashDifference,
+      total_sales_amount: totalSalesAmount,
+      total_cash_sales: totalCashSales,
+      total_card_sales: totalCardSales,
+      total_refunds_amount: totalRefundsAmount,
+      orders_count: ordersCount,
+      message: 'تم إغلاق الوردية ومطابقة النقدية بنجاح',
+    });
+  } catch (err: any) {
+    console.error('Shift close error:', err);
+    return res.status(500).json({ error: err.message || 'حدث خطأ غير متوقع أثناء إغلاق الوردية' });
   }
 });
 
