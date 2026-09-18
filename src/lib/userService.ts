@@ -89,8 +89,18 @@ export async function provisionClientUser(
     }
   } catch (apiErr: any) {
     console.info('Backend provision API unavailable or returned error, falling back to direct DB insert:', apiErr?.message);
-    if (apiErr.message && !apiErr.message.includes('fetch') && !apiErr.message.includes('NetworkError')) {
-      // If server returned specific business error (e.g. invalid input), throw it
+    const msg = apiErr?.message || '';
+    const isNetworkOrUnavailable =
+      msg.includes('fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('404') ||
+      msg.includes('غير متاحة') ||
+      msg.includes('JSON') ||
+      msg.includes('استجابة غير متوقعة') ||
+      msg.includes('Unexpected token');
+
+    if (!isNetworkOrUnavailable) {
+      // If server returned a definitive business validation error, throw it
       throw apiErr;
     }
   }

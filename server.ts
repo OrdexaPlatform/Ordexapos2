@@ -16,13 +16,16 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+const DEFAULT_SUPABASE_URL = 'https://xtfzgootudafgdwoxsnf.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh0Znpnb290dWRhZmdkd294c25mIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODk2MzA5OSwiZXhwIjoyMTA0NTM5MDk5fQ.zHYczV8V_ymlwyXGK2JeCY4_QD2VfnCVDKe6Hjnpgds';
+
+const supabaseUrl = process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_KEY;
 
 // Privileged Supabase client for administrative operations
 const supabaseAdmin = createClient(
-  supabaseUrl || 'https://placeholder-url.supabase.co',
-  supabaseKey || 'placeholder-key',
+  supabaseUrl,
+  supabaseKey,
   {
     auth: {
       autoRefreshToken: false,
@@ -33,8 +36,8 @@ const supabaseAdmin = createClient(
 
 // Standard client for password authentication
 const supabaseAuth = createClient(
-  supabaseUrl || 'https://placeholder-url.supabase.co',
-  supabaseKey || 'placeholder-key',
+  supabaseUrl,
+  supabaseKey,
   {
     auth: {
       persistSession: false,
@@ -343,7 +346,8 @@ app.post('/api/auth/provision-user', async (req, res) => {
     const caller = await authenticateCaller(req);
     if (!caller) {
       return res.status(401).json({
-        error: 'غير مصرح: يلزم تسجيل الدخول لإجراء هذه العملية.',
+        success: false,
+        error: 'غير مصرح: يلزم تسجيل الدخول كمسؤول لإجراء هذه العملية.',
       });
     }
 
@@ -360,7 +364,8 @@ app.post('/api/auth/provision-user', async (req, res) => {
 
     if (!client_id || !name || !email) {
       return res.status(400).json({
-        error: 'البيانات غير مكتملة (اسم المستخدم، البريد، ومعرف العميل مطلوبة)',
+        success: false,
+        error: 'البيانات غير مكتملة (اسم المستخدم، البريد الإلكتروني، ومعرف المنشأة مطلوبة)',
       });
     }
 
@@ -370,6 +375,7 @@ app.post('/api/auth/provision-user', async (req, res) => {
     if (!caller.isSuperAdmin) {
       if (caller.clientUser.client_id !== client_id) {
         return res.status(403).json({
+          success: false,
           error: 'ممنوع الوصول: لا يمكنك إنشاء أو تعديل مستخدمين تابعين لمنشأة أخرى.',
         });
       }
@@ -389,6 +395,7 @@ app.post('/api/auth/provision-user', async (req, res) => {
 
       if (!hasStaffPermission) {
         return res.status(403).json({
+          success: false,
           error: 'ممنوع الوصول: لا تملك الصلاحيات الكافية لإدارة أو إضافة مستخدمين.',
         });
       }
@@ -396,17 +403,46 @@ app.post('/api/auth/provision-user', async (req, res) => {
       // Non-super-admins cannot elevate another user to super_admin or owner unless they are already owner
       if (role === 'owner' && userRole !== 'owner') {
         return res.status(403).json({
+          success: false,
           error: 'ممنوع الوصول: فقط مالك المنشأة يمكنه تعيين مستخدم كمالك.',
         });
       }
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const normalizedName = name.trim();
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedName = String(name).trim();
+
+    // Verify target client exists
+    const { data: targetClient, error: clientFindErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, business_name, customer_name, status')
+      .eq('id', client_id)
+      .maybeSingle();
+
+    if (clientFindErr || !targetClient) {
+      return res.status(404).json({
+        success: false,
+        error: 'المنشأة المحددة غير موجودة (معرف العميل غير صالح).',
+      });
+    }
+
+    // Check for email collision across different clients
+    const { data: crossClientUser } = await supabaseAdmin
+      .from('client_users')
+      .select('id, client_id')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (crossClientUser && crossClientUser.client_id !== client_id) {
+      return res.status(409).json({
+        success: false,
+        error: 'البريد الإلكتروني مسجل بالفعل لدى منشأة أخرى.',
+      });
+    }
 
     let authUserId: string | null = null;
 
-    // Create auth user if password provided
+    // Create or link auth user if password provided
     if (password && password.length >= 6) {
       const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
       const existing = listData?.users?.find(
@@ -486,6 +522,22 @@ app.post('/api/auth/provision-user', async (req, res) => {
       savedUser = inserted;
     }
 
+    // If role is owner, ensure client record reflects owner name
+    if (role === 'owner') {
+      try {
+        await supabaseAdmin
+          .from('clients')
+          .update({
+            owner_name: normalizedName,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', client_id)
+          .is('owner_name', null);
+      } catch (clientSyncErr) {
+        console.warn('Owner name client sync warning:', clientSyncErr);
+      }
+    }
+
     // Audit log
     try {
       await supabaseAdmin.from('activity_logs').insert({
@@ -515,6 +567,7 @@ app.post('/api/auth/provision-user', async (req, res) => {
   } catch (error: any) {
     console.error('Provision user error:', error);
     return res.status(500).json({
+      success: false,
       error: error.message || 'تعذر إنشاء حساب المستخدم',
     });
   }
@@ -525,7 +578,7 @@ app.post('/api/auth/sync-client-owner', requireSuperAdmin, async (req, res) => {
   try {
     const { client_id } = req.body;
     if (!client_id) {
-      return res.status(400).json({ error: 'client_id is required' });
+      return res.status(400).json({ success: false, error: 'client_id is required' });
     }
 
     const { data: client, error: clientErr } = await supabaseAdmin
@@ -535,11 +588,11 @@ app.post('/api/auth/sync-client-owner', requireSuperAdmin, async (req, res) => {
       .single();
 
     if (clientErr || !client) {
-      return res.status(404).json({ error: 'Client not found' });
+      return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
     if (!client.email) {
-      return res.status(400).json({ error: 'Client has no email configured' });
+      return res.status(400).json({ success: false, error: 'Client has no email configured' });
     }
 
     const normalizedEmail = client.email.trim().toLowerCase();
@@ -614,7 +667,7 @@ app.post('/api/auth/sync-client-owner', requireSuperAdmin, async (req, res) => {
     });
   } catch (err: any) {
     console.error('Sync client owner error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -632,18 +685,18 @@ async function requireSuperAdmin(req: express.Request, res: express.Response, ne
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'غير مصرح: يلزم تسجيل الدخول كمسؤول سوبر أدمن للمتابعة.' });
+      return res.status(401).json({ success: false, error: 'غير مصرح: يلزم تسجيل الدخول كمسؤول سوبر أدمن للمتابعة.' });
     }
 
     const token = authHeader.substring(7).trim();
     if (!token) {
-      return res.status(401).json({ error: 'رمز الجلسة غير صالح أو منتهي الصلاحية.' });
+      return res.status(401).json({ success: false, error: 'رمز الجلسة غير صالح أو منتهي الصلاحية.' });
     }
 
     // Verify token with Supabase Auth
     const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
     if (authErr || !user) {
-      return res.status(401).json({ error: 'انتهت صلاحية جلسة المستخدم، يرجى تسجيل الدخول مجدداً.' });
+      return res.status(401).json({ success: false, error: 'انتهت صلاحية جلسة المستخدم، يرجى تسجيل الدخول مجدداً.' });
     }
 
     // Check if user is in super_admin_users table and active
@@ -655,14 +708,14 @@ async function requireSuperAdmin(req: express.Request, res: express.Response, ne
       .maybeSingle();
 
     if (saErr || !superAdminRecord || superAdminRecord.status !== 'active') {
-      return res.status(403).json({ error: 'ممنوع الوصول: هذه العملية مقتصرة حصرياً على السوبر أدمن (Ordexa Super Admin).' });
+      return res.status(403).json({ success: false, error: 'ممنوع الوصول: هذه العملية مقتصرة حصرياً على السوبر أدمن (Ordexa Super Admin).' });
     }
 
     (req as any).superAdminUser = superAdminRecord;
     next();
   } catch (err: any) {
     console.error('requireSuperAdmin middleware error:', err);
-    return res.status(500).json({ error: 'حدث خطأ أثناء التحقق من صلاحيات السوبر أدمن.' });
+    return res.status(500).json({ success: false, error: 'حدث خطأ أثناء التحقق من صلاحيات السوبر أدمن.' });
   }
 }
 
@@ -1710,8 +1763,16 @@ app.get('/api/pwa/manifest/:clientCode', async (req, res) => {
     return res.json(manifest);
   } catch (err: any) {
     console.error('Dynamic manifest error:', err);
-    return res.status(500).json({ error: 'Failed to generate manifest' });
+    return res.status(500).json({ success: false, error: 'Failed to generate manifest' });
   }
+});
+
+// 404 catch-all strictly for /api/* endpoints — guarantees API requests NEVER return HTML
+app.all('/api/*', (req, res) => {
+  return res.status(404).json({
+    success: false,
+    error: `المسار البرمجي المطلوب غير موجود: ${req.method} ${req.path}`,
+  });
 });
 
 // Start the Express server with Vite middleware or static serving
@@ -1735,4 +1796,10 @@ async function startServer() {
   });
 }
 
-startServer();
+// Only start standalone HTTP server when executed directly (not in Vercel or test suite)
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test' && !process.env.IS_TEST) {
+  startServer();
+}
+
+export default app;
+export { app };
