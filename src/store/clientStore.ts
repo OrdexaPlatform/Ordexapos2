@@ -158,8 +158,25 @@ export const useClientStore = create<ClientState>((set, get) => ({
 
         updateDynamicManifestLink(dbClient.client_code, dbClient.business_name);
 
+        // Fetch active license for this client
+        let dbLicense: any = null;
+        try {
+          const { data: lic } = await supabase
+            .from('licenses')
+            .select('*')
+            .eq('client_id', dbClient.id)
+            .eq('status', 'active')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          dbLicense = lic;
+        } catch (licErr) {
+          console.warn('Could not load active license for client:', licErr);
+        }
+
         set({
           client: dbClient as Client,
+          license: dbLicense,
           effectiveLicenseStatus: dbClient.status === 'active' ? 'active' : 'inactive',
           loading: false,
           error: null,

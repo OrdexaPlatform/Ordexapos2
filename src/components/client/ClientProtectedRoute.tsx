@@ -13,6 +13,8 @@ export function ClientProtectedRoute() {
   const { initializeDevice, status: deviceStatus } = useDeviceStore();
   const location = useLocation();
 
+  const initDeviceRef = React.useRef<string | null>(null);
+
   // Load client data & device data once clientUser is detected
   useEffect(() => {
     if (!isSuperAdmin && clientUser?.client_id) {
@@ -24,11 +26,12 @@ export function ClientProtectedRoute() {
 
   useEffect(() => {
     if (!isSuperAdmin && clientUser?.client_id && client?.id === clientUser.client_id) {
-      if (deviceStatus === 'loading') {
+      if (initDeviceRef.current !== clientUser.client_id) {
+        initDeviceRef.current = clientUser.client_id;
         initializeDevice(clientUser.client_id);
       }
     }
-  }, [isSuperAdmin, clientUser?.client_id, client?.id, deviceStatus, initializeDevice]);
+  }, [isSuperAdmin, clientUser?.client_id, client?.id, initializeDevice]);
 
   if (!initialized || loading) {
     return (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, FormEvent } from 'react';
+import React, { useState, useEffect, useRef, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
@@ -61,13 +61,15 @@ export const ClientPosGatewayPage: React.FC = () => {
   }, [clientCode, loadClientByCode]);
 
   // 2. Initialize device verification when authenticated with client user
+  const initDeviceRef = useRef<string | null>(null);
   useEffect(() => {
     if (user && clientUser?.client_id && client?.id === clientUser.client_id) {
-      if (deviceStatus === 'loading' || !deviceStatus) {
+      if (initDeviceRef.current !== client.id) {
+        initDeviceRef.current = client.id;
         initializeDevice(client.id);
       }
     }
-  }, [user, clientUser?.client_id, client?.id, deviceStatus, initializeDevice]);
+  }, [user, clientUser?.client_id, client?.id, initializeDevice]);
 
   // Loading state while resolving client configuration or auth session
   if ((clientLoading && !client) || (!authInitialized && authLoading)) {

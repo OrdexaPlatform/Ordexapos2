@@ -4,6 +4,7 @@ import { Device, POSLicenseValidationResult } from '../types';
 import { validatePOSLicense, registerPOSTerminal, deactivatePOSTerminal } from '../lib/deviceService';
 import { offlineStorage } from '../lib/offline/offlineStorage';
 import { getTerminalHardwareIdentity } from '../lib/electronBridge';
+import { useClientStore } from './clientStore';
 
 interface DeviceState {
   fingerprint: string;
@@ -256,11 +257,16 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
     const osName = hwIdentity?.operatingSystem || get().operatingSystem;
     const isDesktop = hwIdentity?.fingerprint?.startsWith('DEV-WIN-') || false;
 
+    const isAlreadyActiveForThisClient = 
+      get().isActivated && 
+      get().status === 'active' && 
+      get().device?.client_id === clientId;
+
     set({ 
       fingerprint: currentFp, 
       operatingSystem: osName,
       isDesktopNative: isDesktop,
-      status: 'loading', 
+      status: isAlreadyActiveForThisClient ? 'active' : 'loading', 
       errorMessage: null 
     });
 
@@ -316,8 +322,32 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         const val = validation || get().licenseValidation;
         const maxDevs = val?.license?.max_devices ?? 1;
         const actDevs = val?.license?.activated_devices ?? 0;
-        const licKey = val?.license?.license_key;
+        let licKey = val?.license?.license_key;
         const effectiveClientId = clientId || val?.client?.id;
+
+        // Fallback: resolve license_key from clientStore if missing from validation
+        if (!licKey && effectiveClientId) {
+          const clientLicense = useClientStore.getState().license;
+          if (clientLicense?.license_key) {
+            licKey = clientLicense.license_key;
+          } else {
+            try {
+              const { data: directLic } = await supabaseAnonQuery
+                .from('licenses')
+                .select('*')
+                .eq('client_id', effectiveClientId)
+                .eq('status', 'active')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              if (directLic) {
+                licKey = directLic.license_key;
+              }
+            } catch (licFetchErr) {
+              console.warn('License key direct resolution warning:', licFetchErr);
+            }
+          }
+        }
 
         if (maxDevs && actDevs >= maxDevs) {
           // Device quota fully utilized
@@ -338,7 +368,12 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
             get().deviceName || 'نقطة بيع - متصفح الويب'
           );
 
-          if (regRes.success && get().device) {
+          if (regRes.success) {
+            set({
+              status: 'active',
+              isActivated: true,
+              errorMessage: null,
+            });
             return;
           } else if (regRes.message && regRes.message.includes('الحد الأقصى')) {
             set({

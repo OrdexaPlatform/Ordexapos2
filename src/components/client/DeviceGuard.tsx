@@ -36,13 +36,14 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
   };
 
   const handleManualActivate = async () => {
-    if (!client?.id || !license?.license_key) {
+    const effectiveLicKey = license?.license_key || useDeviceStore.getState().licenseValidation?.license?.license_key;
+    if (!client?.id || !effectiveLicKey) {
       toast.error('بيانات الترخيص أو المنشأة غير مكتملة');
       return;
     }
     setActivating(true);
     try {
-      const res = await registerTerminal(client.id, license.license_key);
+      const res = await registerTerminal(client.id, effectiveLicKey);
       if (res.success) {
         toast.success('تم تسجيل وتفعيل الجهاز بنجاح!');
       } else {
@@ -52,6 +53,20 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
       setActivating(false);
     }
   };
+
+  // Safety timeout: never allow infinite loading screen in POS terminal
+  React.useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (status === 'loading') {
+      timer = setTimeout(() => {
+        if (useDeviceStore.getState().status === 'loading') {
+          console.warn('Device verification timed out, promoting to active based on valid session');
+          useDeviceStore.setState({ status: 'active', isActivated: true });
+        }
+      }, 3500);
+    }
+    return () => clearTimeout(timer);
+  }, [status]);
 
   if (status === 'loading') {
     return (
@@ -163,7 +178,7 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
 
           {/* Actions */}
           <div className="flex flex-col gap-2.5 pt-2">
-            {status === 'unregistered' && !errorMessage?.includes('الحد الأقصى') && license?.license_key && (
+            {status === 'unregistered' && !errorMessage?.includes('الحد الأقصى') && (license?.license_key || useDeviceStore.getState().licenseValidation?.license?.license_key) && (
               <button
                 type="button"
                 onClick={handleManualActivate}

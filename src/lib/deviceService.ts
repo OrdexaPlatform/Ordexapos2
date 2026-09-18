@@ -421,8 +421,12 @@ export async function validatePOSLicense(
       p_device_fingerprint: deviceFingerprint || null,
     });
 
-    if (!error && data) {
+    if (!error && data && data.is_valid) {
       return data as import('../types').POSLicenseValidationResult;
+    }
+    
+    if (data && !data.is_valid) {
+      console.warn('validate_pos_license RPC returned invalid result (e.g. UNAUTHENTICATED), proceeding to direct client-side verification:', data);
     }
   } catch (err) {
     console.warn('validate_pos_license RPC error, falling back to client-side verification:', err);

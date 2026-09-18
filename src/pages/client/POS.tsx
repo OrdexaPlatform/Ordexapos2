@@ -137,7 +137,7 @@ export const POSPage: React.FC = () => {
 
           if (whData && whData.length > 0) {
             loadedWarehouses = whData;
-            await offlineStorage.saveWarehouses(whData);
+            offlineStorage.saveWarehouses(whData).catch(err => console.warn('Offline cache warehouses warning:', err));
             try { localStorage.setItem(`ordexa_cached_warehouses_${clientId}`, JSON.stringify(whData)); } catch {}
           }
 
@@ -150,7 +150,7 @@ export const POSPage: React.FC = () => {
 
           if (catData && catData.length > 0) {
             loadedCategories = catData;
-            await offlineStorage.saveCategories(catData);
+            offlineStorage.saveCategories(catData).catch(err => console.warn('Offline cache categories warning:', err));
             try { localStorage.setItem(`ordexa_cached_categories_${clientId}`, JSON.stringify(catData)); } catch {}
           }
 
@@ -168,7 +168,7 @@ export const POSPage: React.FC = () => {
 
           if (!prodErr && prodData) {
             loadedProducts = prodData;
-            await offlineStorage.saveProducts(prodData);
+            offlineStorage.saveProducts(prodData).catch(err => console.warn('Offline cache products warning:', err));
             try { localStorage.setItem(`ordexa_cached_products_${clientId}`, JSON.stringify(prodData)); } catch {}
           }
         } catch (netErr) {
@@ -243,7 +243,6 @@ export const POSPage: React.FC = () => {
     loadPOSData();
     if (clientId) {
       loadActiveShift(clientId);
-      initializeDevice(clientId);
     }
   }, [clientId]);
 
