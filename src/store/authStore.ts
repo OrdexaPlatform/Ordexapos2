@@ -162,13 +162,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // 2. Check if user is a Client User (either by auth_user_id or by email)
       try {
-        const { data: clientUserData, error: clientUserErr } = await supabaseAnonQuery
+        let clientUserData: any = null;
+        const { data: cuData, error: clientUserErr } = await supabaseAnonQuery
           .from('client_users')
           .select('*')
-          .or(`auth_user_id.eq.${user.id},email.eq.${normalizedEmail}`)
+          .or(`auth_user_id.eq.${user.id},email.ilike.${normalizedEmail}`)
           .maybeSingle();
 
-        if (!clientUserErr && clientUserData) {
+        clientUserData = cuData;
+
+        // Fallback: If not found in client_users, check if user is the registered owner of an active client
+        if (!clientUserData && normalizedEmail) {
+          const { data: clientRecord } = await supabaseAnonQuery
+            .from('clients')
+            .select('id, business_name, email, status, owner_name, customer_name, phone')
+            .ilike('email', normalizedEmail)
+            .maybeSingle();
+
+          if (clientRecord && clientRecord.status === 'active') {
+            clientUserData = {
+              id: user.id,
+              client_id: clientRecord.id,
+              auth_user_id: user.id,
+              name: clientRecord.owner_name || clientRecord.customer_name || 'مالك المنشأة',
+              email: normalizedEmail,
+              phone: clientRecord.phone || null,
+              role: 'owner' as const,
+              status: 'active' as const,
+              custom_permissions: ['*'],
+            };
+          }
+        }
+
+        if (clientUserData) {
           // Reject inactive user with clear reason
           if (clientUserData.status === 'inactive') {
             await supabase.auth.signOut();
@@ -188,16 +214,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
           // Link auth_user_id if not yet linked
           if (!clientUserData.auth_user_id && user.id) {
-            await supabaseAnonQuery
-              .from('client_users')
-              .update({ auth_user_id: user.id, last_login_at: now })
-              .eq('id', clientUserData.id);
+            try {
+              await supabaseAnonQuery
+                .from('client_users')
+                .update({ auth_user_id: user.id, last_login_at: now })
+                .eq('id', clientUserData.id);
+            } catch (e) {
+              console.warn('Could not update client_user auth_user_id:', e);
+            }
             clientUserData.auth_user_id = user.id;
           } else {
-            await supabaseAnonQuery
-              .from('client_users')
-              .update({ last_login_at: now })
-              .eq('id', clientUserData.id);
+            try {
+              await supabaseAnonQuery
+                .from('client_users')
+                .update({ last_login_at: now })
+                .eq('id', clientUserData.id);
+            } catch (e) {
+              console.warn('Could not update client_user last_login_at:', e);
+            }
           }
 
           clientUserData.last_login_at = now;
@@ -232,7 +266,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           return;
         }
       } catch (err: any) {
-        if (err.message && err.message.includes('معطل')) {
+        if (err.message && (err.message.includes('معطل') || err.message.includes('حسابك'))) {
           throw err;
         }
         console.warn('Client users table query warning:', err);
@@ -250,7 +284,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         initialized: true, 
         loading: false 
       });
-    } catch (error) {
+      throw new Error('هذا الحساب غير مسجل أو غير مرتبط بمنشأة نشطة في نظام Ordexa.');
+    } catch (error: any) {
       console.error('Error determining user role:', error);
       await supabase.auth.signOut();
       set({ 
@@ -262,6 +297,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         initialized: true, 
         loading: false 
       });
+      throw error;
     }
   },
 

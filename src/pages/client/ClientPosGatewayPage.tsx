@@ -176,7 +176,7 @@ export const ClientPosGatewayPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('POS Gateway login error:', err);
-      const msg = err?.message || 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+      const msg = err?.message || 'اسم المستخدم أو كلمة المرور غير صحيحة';
       setLocalAuthError(msg);
       toast.error(msg);
     } finally {
@@ -249,14 +249,15 @@ export const ClientPosGatewayPage: React.FC = () => {
             <form onSubmit={handleLoginSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  البريد الإلكتروني / اسم المستخدم
+                  البريد الإلكتروني أو اسم المستخدم
                 </label>
                 <input
-                  type="email"
+                  type="text"
+                  autoComplete="username"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="cashier@business.com"
+                  placeholder="cashier@business.com أو اسم المستخدم"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 ltr text-left"
                 />
               </div>

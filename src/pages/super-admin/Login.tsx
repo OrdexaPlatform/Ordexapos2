@@ -49,10 +49,10 @@ export function Login() {
     } catch (error: any) {
       console.error('Login error:', error);
       const msg = error?.message || '';
-      if (msg.includes('الإنترنت') || msg.includes('الخادم')) {
+      if (msg) {
         toast.error(msg);
       } else {
-        toast.error('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+        toast.error('اسم المستخدم أو كلمة المرور غير صحيحة.');
       }
     } finally {
       setLoading(false);
@@ -80,19 +80,19 @@ export function Login() {
           <form className="space-y-6" onSubmit={handleLogin}>
             <div>
               <label htmlFor="email" className="block text-sm font-medium leading-6 text-slate-900">
-                البريد الإلكتروني
+                البريد الإلكتروني أو اسم المستخدم
               </label>
               <div className="mt-2">
                 <input
                   id="email"
                   name="email"
-                  type="email"
-                  autoComplete="email"
+                  type="text"
+                  autoComplete="username"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="block w-full rounded-md border-0 py-2.5 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-slate-900 sm:text-sm sm:leading-6 transition-all"
-                  placeholder="admin@ordexa.com"
+                  placeholder="admin@ordexa.com أو اسم المستخدم"
                 />
               </div>
             </div>

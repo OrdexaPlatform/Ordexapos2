@@ -28,7 +28,7 @@ export function ClientLogin() {
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
-      toast.error('يرجى إدخال البريد الإلكتروني وكلمة المرور');
+      toast.error('يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور');
       return;
     }
 
@@ -60,14 +60,10 @@ export function ClientLogin() {
     } catch (error: any) {
       console.error('Client login error:', error);
       const msg = error?.message || '';
-      if (msg.includes('معطل') || msg.includes('حسابك')) {
+      if (msg) {
         toast.error(msg);
-      } else if (msg.includes('الإنترنت') || msg.includes('الخادم')) {
-        toast.error(msg);
-      } else if (msg.toLowerCase().includes('fetch') || error?.name === 'TypeError') {
-        toast.error('تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.');
       } else {
-        toast.error('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+        toast.error('اسم المستخدم أو كلمة المرور غير صحيحة.');
       }
     } finally {
       setLoading(false);
@@ -106,18 +102,18 @@ export function ClientLogin() {
           <form className="space-y-5" onSubmit={handleLogin}>
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-                البريد الإلكتروني
+                البريد الإلكتروني أو اسم المستخدم
               </label>
               <div className="mt-1.5">
                 <input
                   id="email"
                   name="email"
-                  type="email"
-                  autoComplete="email"
+                  type="text"
+                  autoComplete="username"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@business.com"
+                  placeholder="name@business.com أو اسم المستخدم"
                   className="block w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-slate-900 placeholder-slate-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-600 text-sm ltr text-left"
                 />
               </div>

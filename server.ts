@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
@@ -58,12 +57,82 @@ app.get('/api/health', (req, res) => {
 // Server-side login proxy: Prevents browser ad-blockers / CORS issues from causing "Failed to fetch"
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' });
+    const { email: rawIdentifier, password } = req.body;
+    if (!rawIdentifier || !password) {
+      return res.status(400).json({ error: 'يرجى إدخال البريد الإلكتروني أو اسم المستخدم وكلمة المرور' });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
+    let normalizedEmail = String(rawIdentifier).trim().toLowerCase();
+
+    // Support username / name / phone resolution if identifier is not an email
+    if (!normalizedEmail.includes('@')) {
+      const trimmedId = String(rawIdentifier).trim();
+
+      // Check super_admin_users
+      const { data: saExact } = await supabaseAdmin
+        .from('super_admin_users')
+        .select('email')
+        .ilike('name', trimmedId)
+        .limit(1);
+
+      if (saExact && saExact.length > 0 && saExact[0].email) {
+        normalizedEmail = saExact[0].email.toLowerCase();
+      } else {
+        const { data: saPartial } = await supabaseAdmin
+          .from('super_admin_users')
+          .select('email')
+          .ilike('name', `%${trimmedId}%`)
+          .limit(1);
+
+        if (saPartial && saPartial.length > 0 && saPartial[0].email) {
+          normalizedEmail = saPartial[0].email.toLowerCase();
+        } else {
+          // Check client_users exact
+          const { data: cuExact } = await supabaseAdmin
+            .from('client_users')
+            .select('email')
+            .or(`name.ilike.${trimmedId},phone.eq.${trimmedId}`)
+            .limit(1);
+
+          if (cuExact && cuExact.length > 0 && cuExact[0].email) {
+            normalizedEmail = cuExact[0].email.toLowerCase();
+          } else {
+            // Check client_users partial
+            const { data: cuPartial } = await supabaseAdmin
+              .from('client_users')
+              .select('email')
+              .ilike('name', `%${trimmedId}%`)
+              .limit(1);
+
+            if (cuPartial && cuPartial.length > 0 && cuPartial[0].email) {
+              normalizedEmail = cuPartial[0].email.toLowerCase();
+            } else {
+              // Check clients exact
+              const { data: clExact } = await supabaseAdmin
+                .from('clients')
+                .select('email')
+                .or(`owner_name.ilike.${trimmedId},customer_name.ilike.${trimmedId},phone.eq.${trimmedId}`)
+                .limit(1);
+
+              if (clExact && clExact.length > 0 && clExact[0].email) {
+                normalizedEmail = clExact[0].email.toLowerCase();
+              } else {
+                // Check clients partial
+                const { data: clPartial } = await supabaseAdmin
+                  .from('clients')
+                  .select('email')
+                  .or(`owner_name.ilike.%${trimmedId}%,customer_name.ilike.%${trimmedId}%`)
+                  .limit(1);
+
+                if (clPartial && clPartial.length > 0 && clPartial[0].email) {
+                  normalizedEmail = clPartial[0].email.toLowerCase();
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     // 1. First attempt direct Supabase authentication
     let authResult = await supabaseAuth.auth.signInWithPassword({
@@ -1778,6 +1847,7 @@ app.all('/api/*', (req, res) => {
 // Start the Express server with Vite middleware or static serving
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1796,8 +1866,17 @@ async function startServer() {
   });
 }
 
-// Only start standalone HTTP server when executed directly (not in Vercel or test suite)
-if (!process.env.VERCEL && process.env.NODE_ENV !== 'test' && !process.env.IS_TEST) {
+// Only start standalone HTTP server when executed directly (not in Vercel or serverless or test suite)
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.NOW_REGION ||
+  process.env.NODE_ENV === 'test' ||
+  process.env.IS_TEST
+);
+
+if (!isServerless) {
   startServer();
 }
 

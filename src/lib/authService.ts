@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabaseAnonQuery } from './supabase';
 import type { Session, User } from '@supabase/supabase-js';
 import type { ClientUser, ClientUserRole, ClientUserStatus } from '../types';
 
@@ -20,17 +20,117 @@ export interface ProvisionUserInput {
 }
 
 /**
+ * Resolves username, name, phone, or email to the associated account email address.
+ * Works seamlessly across Super Admin, Client Users, and Client Owners.
+ */
+export async function resolveUsernameOrEmail(identifier: string): Promise<string> {
+  const trimmed = (identifier || '').trim();
+  if (!trimmed) return '';
+
+  // If already an email address, normalize to lowercase
+  if (trimmed.includes('@')) {
+    return trimmed.toLowerCase();
+  }
+
+  try {
+    // 1. Check super_admin_users by exact or partial name
+    const { data: saExact } = await supabaseAnonQuery
+      .from('super_admin_users')
+      .select('email')
+      .ilike('name', trimmed)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (saExact && saExact.length > 0 && saExact[0].email) {
+      return saExact[0].email.toLowerCase();
+    }
+
+    const { data: saPartial } = await supabaseAnonQuery
+      .from('super_admin_users')
+      .select('email')
+      .ilike('name', `%${trimmed}%`)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (saPartial && saPartial.length > 0 && saPartial[0].email) {
+      return saPartial[0].email.toLowerCase();
+    }
+
+    // 2. Check client_users by exact name or phone
+    const { data: cuExact } = await supabaseAnonQuery
+      .from('client_users')
+      .select('email')
+      .or(`name.ilike.${trimmed},phone.eq.${trimmed}`)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (cuExact && cuExact.length > 0 && cuExact[0].email) {
+      return cuExact[0].email.toLowerCase();
+    }
+
+    // Check client_users by partial name
+    const { data: cuPartial } = await supabaseAnonQuery
+      .from('client_users')
+      .select('email')
+      .ilike('name', `%${trimmed}%`)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (cuPartial && cuPartial.length > 0 && cuPartial[0].email) {
+      return cuPartial[0].email.toLowerCase();
+    }
+
+    // 3. Check clients by exact owner_name, customer_name, or phone
+    const { data: clExact } = await supabaseAnonQuery
+      .from('clients')
+      .select('email')
+      .or(`owner_name.ilike.${trimmed},customer_name.ilike.${trimmed},phone.eq.${trimmed}`)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (clExact && clExact.length > 0 && clExact[0].email) {
+      return clExact[0].email.toLowerCase();
+    }
+
+    // Check clients by partial owner_name or customer_name
+    const { data: clPartial } = await supabaseAnonQuery
+      .from('clients')
+      .select('email')
+      .or(`owner_name.ilike.%${trimmed}%,customer_name.ilike.%${trimmed}%`)
+      .eq('status', 'active')
+      .limit(1);
+
+    if (clPartial && clPartial.length > 0 && clPartial[0].email) {
+      return clPartial[0].email.toLowerCase();
+    }
+  } catch (err) {
+    console.warn('Username to email resolution fallback warning:', err);
+  }
+
+  return trimmed.toLowerCase();
+}
+
+/**
  * Universal login service:
- * 1. Tries the same-origin backend proxy (/api/auth/login) first to eliminate CORS, ad-blockers,
+ * 1. Supports both Username / Name / Phone and Email inputs with automatic resolution.
+ * 2. Tries the same-origin backend proxy (/api/auth/login) first to eliminate CORS, ad-blockers,
  *    and iframe cross-origin "Failed to fetch" errors.
- * 2. Syncs the resulting session with the Supabase client so all real-time listeners and RLS queries work.
- * 3. Gracefully falls back to direct client-side Supabase Auth if the server endpoint is not reached.
+ * 3. Syncs the resulting session with the Supabase client so all real-time listeners and RLS queries work.
+ * 4. Gracefully falls back to direct client-side Supabase Auth if the server endpoint is not reached.
  */
 export async function loginWithCredentials(
-  email: string,
+  identifier: string,
   password: string
 ): Promise<LoginResult> {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = await resolveUsernameOrEmail(identifier);
+
+  if (!normalizedEmail || !password) {
+    return {
+      user: null,
+      session: null,
+      error: new Error('يرجى إدخال اسم المستخدم أو البريد الإلكتروني وكلمة المرور.'),
+    };
+  }
 
   // 1. Try server-side API proxy (Same-origin request)
   try {
@@ -67,7 +167,7 @@ export async function loginWithCredentials(
         return {
           user: null,
           session: null,
-          error: new Error(data?.error || 'البريد الإلكتروني أو كلمة المرور غير صحيحة.'),
+          error: new Error(data?.error || 'اسم المستخدم أو كلمة المرور غير صحيحة.'),
         };
       }
     }
@@ -86,7 +186,7 @@ export async function loginWithCredentials(
       return {
         user: null,
         session: null,
-        error: new Error('البريد الإلكتروني أو كلمة المرور غير صحيحة.'),
+        error: new Error('اسم المستخدم أو كلمة المرور غير صحيحة.'),
       };
     }
 
