@@ -39,7 +39,8 @@ import {
   ShieldAlert,
   Clock,
   Tag,
-  Barcode
+  Barcode,
+  X
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -271,13 +272,37 @@ export function ClientPreviewPage() {
     return Number((subtotal + taxAmount).toFixed(2));
   }, [subtotal, taxAmount]);
 
+  // Arabic text normalization for fast, resilient Arabic partial search
+  const normalizeArabic = (text: string = ''): string => {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[\u064B-\u065F]/g, '')
+      .replace(/[أإآٱ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/[ىي]/g, 'ي');
+  };
+
   // Filtered Products
   const filteredProducts = useMemo(() => {
+    const cleanQuery = searchQuery.trim();
+    const rawQ = cleanQuery.toLowerCase();
+    const normQ = normalizeArabic(cleanQuery);
+    const noSpaceQ = normQ.replace(/\s+/g, '');
+
     return products.filter((p) => {
-      const matchesSearch = 
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (p.barcode && p.barcode.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (p.sku && p.sku.toLowerCase().includes(searchQuery.toLowerCase()));
+      const pName = (p.name || '').toLowerCase();
+      const pNameNorm = normalizeArabic(p.name || '');
+      const pNameNoSpace = pNameNorm.replace(/\s+/g, '');
+      const pBarcode = (p.barcode || '').toLowerCase();
+      const pSku = (p.sku || '').toLowerCase();
+
+      const matchesSearch = !cleanQuery || 
+        pName.includes(rawQ) || 
+        pNameNorm.includes(normQ) || 
+        pNameNoSpace.includes(noSpaceQ) ||
+        pBarcode.includes(rawQ) || 
+        pSku.includes(rawQ);
       
       const matchesCategory = selectedCategory === 'all' || p.category_id === selectedCategory;
 
@@ -590,14 +615,25 @@ export function ClientPreviewPage() {
               {/* Search & Category Filter */}
               <div className="bg-white rounded-xl p-4 shadow-xs border border-slate-200 space-y-3">
                 <div className="relative">
-                  <Search className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-600 pointer-events-none" />
                   <input
+                    id="client-preview-pos-search-input"
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="البحث باسم الصنف، الباركود، أو الرمز..."
-                    className="w-full pr-9 pl-4 py-2 text-xs sm:text-sm rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50"
+                    placeholder="ابحث عن اسم المنتج أو الكود..."
+                    className="w-full pr-10 pl-10 py-2.5 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white placeholder:text-slate-400 text-slate-900 shadow-2xs transition-all"
                   />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md hover:bg-slate-100 transition-colors"
+                      title="مسح البحث"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
 
                 {/* Categories Pills */}
