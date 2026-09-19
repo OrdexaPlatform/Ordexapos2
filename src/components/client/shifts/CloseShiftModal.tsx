@@ -32,7 +32,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   shift,
   onShiftClosed,
 }) => {
-  const { currencySymbol } = useCurrency();
+  const { currencySymbol, currencyName } = useCurrency();
   const { clientUser } = useAuthStore();
   const clientId = clientUser?.client_id;
   const { closeShift, isLoading } = useShiftStore();
@@ -261,7 +261,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               <span className="font-mono text-xl font-black text-amber-400">
                 {expectedCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
-              <span className="text-xs text-slate-300 mr-1.5 font-bold">ريال</span>
+              <span className="text-xs text-slate-300 mr-1.5 font-bold">{currencySymbol}</span>
             </div>
           </div>
 
@@ -310,8 +310,8 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
                   {difference === 0
                     ? 'مطابق تماماً (لا يوجد عجز أو زيادة)'
                     : difference < 0
-                    ? `عجز في الصندوق بمقدار ${Math.abs(difference)} ريال`
-                    : `فائض / زيادة في الصندوق بمقدار ${difference} ريال`}
+                    ? `عجز في الصندوق بمقدار ${Math.abs(difference)} ${currencySymbol}`
+                    : `فائض / زيادة في الصندوق بمقدار ${difference} ${currencySymbol}`}
                 </span>
                 <span className="text-[11px] opacity-80">
                   {difference === 0
@@ -337,7 +337,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               rows={2}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="مثال: تسليم الوردية للمشرف، وفارق 2 ريال تم إيداعه..."
+              placeholder={`مثال: تسليم الوردية للمشرف، وفارق ${currencySymbol} تم إيداعه...`}
               className="w-full p-3 text-sm text-slate-800 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 resize-none"
             />
           </div>

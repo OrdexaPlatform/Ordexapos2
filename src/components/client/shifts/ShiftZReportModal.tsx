@@ -17,7 +17,7 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
   shift,
 }) => {
   const { client } = useClientStore();
-  const { currencySymbol } = useCurrency();
+  const { currencySymbol, currencyName } = useCurrency();
   const [transactions, setTransactions] = useState<CashDrawerTransaction[]>([]);
   const [printFormat, setPrintFormat] = useState<'thermal' | 'a4'>('thermal');
 
@@ -150,7 +150,7 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
             <div className="py-3 border-b border-dashed border-slate-300 space-y-1.5 text-xs">
               <div className="font-bold text-slate-800 pb-1 flex items-center justify-between">
                 <span>مطابقة الدرج النقدي</span>
-                <span className="text-[10px] text-slate-400">ريال سعودي</span>
+                <span className="text-[10px] font-semibold text-slate-500">{currencyName} ({currencySymbol})</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600">الرصيد الافتتاحي:</span>

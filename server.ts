@@ -1352,7 +1352,7 @@ app.post('/api/shifts/open', async (req, res) => {
     // 1. Verify client status
     const { data: client, error: clientErr } = await supabaseAdmin
       .from('clients')
-      .select('id, name, status')
+      .select('id, business_name, status')
       .eq('id', clientId)
       .single();
 
