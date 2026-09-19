@@ -1337,6 +1337,7 @@ app.post('/api/shifts/open', async (req, res) => {
       deviceFingerprint = null,
       deviceId: inputDeviceId = null,
       userId = null,
+      clientUserId: inputClientUserId = null,
     } = req.body;
 
     if (!clientId) {
@@ -1379,34 +1380,106 @@ app.post('/api/shifts/open', async (req, res) => {
       return res.status(403).json({ error: 'انتهت صلاحية ترخيص المنشأة. يرجى تجديد الاشتراك.' });
     }
 
-    // 3. Resolve cashier / client user
+    // 3. Resolve and strictly verify cashier / client user
     let clientUserId: string | null = null;
-    if (userId) {
-      const { data: cu } = await supabaseAdmin
+    let cashierName: string = 'الكاشير';
+
+    // Check bearer token from authorization header if available
+    let tokenAuthUserId: string | null = null;
+    let tokenAuthEmail: string | null = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7).trim();
+      try {
+        const { data: tokenUserData } = await supabaseAdmin.auth.getUser(token);
+        if (tokenUserData?.user) {
+          tokenAuthUserId = tokenUserData.user.id;
+          tokenAuthEmail = tokenUserData.user.email || null;
+        }
+      } catch {}
+    }
+
+    const candidateAuthId = userId || tokenAuthUserId;
+
+    // A. Verify if direct clientUserId was provided and belongs to this client
+    if (inputClientUserId) {
+      const { data: cuById } = await supabaseAdmin
         .from('client_users')
-        .select('id, name, status, role')
+        .select('id, client_id, name, status, role')
+        .eq('id', inputClientUserId)
         .eq('client_id', clientId)
-        .or(`id.eq.${userId},auth_user_id.eq.${userId}`)
         .maybeSingle();
-      if (cu) {
-        clientUserId = cu.id;
+
+      if (cuById) {
+        if (cuById.status !== 'active') {
+          return res.status(403).json({ error: 'حساب الكاشير غير نشط. يرجى التواصل مع الإدارة.' });
+        }
+        clientUserId = cuById.id;
+        cashierName = cuById.name;
       }
     }
 
+    // B. Verify by auth user UUID if not yet resolved
+    if (!clientUserId && candidateAuthId) {
+      const { data: cuByAuth } = await supabaseAdmin
+        .from('client_users')
+        .select('id, client_id, name, status, role')
+        .eq('client_id', clientId)
+        .or(`auth_user_id.eq.${candidateAuthId},id.eq.${candidateAuthId}`)
+        .maybeSingle();
+
+      if (cuByAuth) {
+        if (cuByAuth.status !== 'active') {
+          return res.status(403).json({ error: 'حساب الكاشير غير نشط. يرجى التواصل مع الإدارة.' });
+        }
+        clientUserId = cuByAuth.id;
+        cashierName = cuByAuth.name;
+      }
+    }
+
+    // C. Verify by email if auth user is logged in
+    if (!clientUserId && tokenAuthEmail) {
+      const { data: cuByEmail } = await supabaseAdmin
+        .from('client_users')
+        .select('id, client_id, name, status, role')
+        .eq('client_id', clientId)
+        .ilike('email', tokenAuthEmail.trim().toLowerCase())
+        .maybeSingle();
+
+      if (cuByEmail) {
+        if (cuByEmail.status !== 'active') {
+          return res.status(403).json({ error: 'حساب الكاشير غير نشط. يرجى التواصل مع الإدارة.' });
+        }
+        clientUserId = cuByEmail.id;
+        cashierName = cuByEmail.name;
+        // Sync auth_user_id link
+        if (candidateAuthId) {
+          await supabaseAdmin
+            .from('client_users')
+            .update({ auth_user_id: candidateAuthId })
+            .eq('id', cuByEmail.id);
+        }
+      }
+    }
+
+    // D. If still not resolved, check active client users for this client
     if (!clientUserId) {
       const { data: fallbackUsers } = await supabaseAdmin
         .from('client_users')
-        .select('id, name, status, role')
+        .select('id, client_id, name, status, role')
         .eq('client_id', clientId)
         .eq('status', 'active')
         .limit(1);
+
       if (fallbackUsers && fallbackUsers.length > 0) {
         clientUserId = fallbackUsers[0].id;
+        cashierName = fallbackUsers[0].name;
       }
     }
 
+    // Strict validation: opened_by MUST NOT be null
     if (!clientUserId) {
-      return res.status(400).json({ error: 'لا يوجد مستخدم نشط مسجل لفتح الوردية' });
+      return res.status(401).json({ error: 'تعذر تحديد حساب الكاشير. يرجى تسجيل الدخول مرة أخرى.' });
     }
 
     // 4. Resolve Device
@@ -1571,6 +1644,8 @@ app.post('/api/shifts/open', async (req, res) => {
       shift_id: shiftId,
       shift_number: shiftNumber,
       register_id: registerId,
+      opened_by: clientUserId,
+      cashier_name: cashierName,
       message: 'تم فتح الوردية بنجاح! جاهز لبدء البيع',
     });
   } catch (err: any) {
@@ -1663,12 +1738,26 @@ app.post('/api/shifts/close', async (req, res) => {
     const actualCash = Number(closingCashActual);
     const cashDifference = actualCash - expectedCash;
 
+    // Resolve closing client_user (must reference client_users(id))
+    let closingClientUserId = shift.opened_by;
+    if (userId) {
+      const { data: cu } = await supabaseAdmin
+        .from('client_users')
+        .select('id')
+        .eq('client_id', clientId)
+        .or(`id.eq.${userId},auth_user_id.eq.${userId}`)
+        .maybeSingle();
+      if (cu) {
+        closingClientUserId = cu.id;
+      }
+    }
+
     // 6. Update shift record
     const { data: closedShift, error: closeErr } = await supabaseAdmin
       .from('shifts')
       .update({
         status: 'closed',
-        closed_by: userId || shift.opened_by,
+        closed_by: closingClientUserId,
         closed_at: new Date().toISOString(),
         closing_cash_actual: actualCash,
         closing_cash_expected: expectedCash,

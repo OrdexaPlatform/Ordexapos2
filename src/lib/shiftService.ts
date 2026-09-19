@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { offlineStorage } from './offline/offlineStorage';
 import { 
   Shift, 
   ShiftSummary, 
@@ -14,6 +15,22 @@ export const shiftService = {
    * Fetch current active open shift for the authenticated user / register
    */
   async getActiveShift(clientId?: string): Promise<Shift | null> {
+    // 0. If offline, immediately return locally cached shift
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (clientId) {
+        const cached = await offlineStorage.getCurrentShift(clientId);
+        if (cached && cached.status === 'open') return cached;
+        try {
+          const raw = localStorage.getItem(`ordexa_active_shift_${clientId}`);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.status === 'open') return parsed;
+          }
+        } catch {}
+      }
+      return null;
+    }
+
     try {
       const { data, error } = await supabase.rpc('get_active_shift', {
         p_client_id: clientId || null,
@@ -22,13 +39,25 @@ export const shiftService = {
       if (error) {
         // If RPC isn't executed in DB yet or fails, fallback to direct query
         console.warn('RPC get_active_shift returned error, trying fallback:', error.message);
-        return await this.getActiveShiftFallback(clientId);
+        const fallbackShift = await this.getActiveShiftFallback(clientId);
+        if (fallbackShift && clientId) {
+          offlineStorage.saveCurrentShift(clientId, fallbackShift).catch(() => {});
+          try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(fallbackShift)); } catch {}
+        }
+        return fallbackShift;
       }
 
-      if (!data) return null;
+      if (!data) {
+        if (clientId) {
+          // If server explicitly says no open shift, clear local shift
+          offlineStorage.saveCurrentShift(clientId, null).catch(() => {});
+          try { localStorage.removeItem(`ordexa_active_shift_${clientId}`); } catch {}
+        }
+        return null;
+      }
 
       // Extract shift object
-      return {
+      const shiftObj: Shift = {
         id: data.id,
         client_id: data.client_id,
         shift_number: data.shift_number,
@@ -56,8 +85,26 @@ export const shiftService = {
         created_at: data.opened_at,
         updated_at: data.opened_at,
       };
+
+      if (clientId) {
+        offlineStorage.saveCurrentShift(clientId, shiftObj).catch(() => {});
+        try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(shiftObj)); } catch {}
+      }
+
+      return shiftObj;
     } catch (err: any) {
-      console.error('Failed to get active shift:', err);
+      console.error('Failed to get active shift, trying local cache fallback:', err);
+      if (clientId) {
+        const cached = await offlineStorage.getCurrentShift(clientId);
+        if (cached && cached.status === 'open') return cached;
+        try {
+          const raw = localStorage.getItem(`ordexa_active_shift_${clientId}`);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.status === 'open') return parsed;
+          }
+        } catch {}
+      }
       return null;
     }
   },
@@ -100,14 +147,132 @@ export const shiftService = {
   },
 
   /**
-   * Open a new shift atomically
+   * Open a new shift atomically with authenticated cashier identity
    */
   async openShift(payload: OpenShiftPayload): Promise<{ success: boolean; shift_id: string; shift_number: string }> {
-    // 1. Primary: High-performance atomic server endpoint (avoids DB function signature conflicts & missing extensions)
+    // 1. Resolve Authenticated User and Profile Mapping (Requirement 2, 4, 7)
+    let authUser: any = null;
     try {
+      const { data: authData } = await supabase.auth.getUser();
+      authUser = authData?.user || null;
+    } catch {}
+
+    // Check cached auth user in localStorage if network error or offline
+    const cachedAuthUserStr = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_cached_auth_user') : null;
+    const cachedClientUserStr = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_cached_client_user') : null;
+    let cachedAuthUser: any = null;
+    let cachedClientUser: any = null;
+    try { if (cachedAuthUserStr) cachedAuthUser = JSON.parse(cachedAuthUserStr); } catch {}
+    try { if (cachedClientUserStr) cachedClientUser = JSON.parse(cachedClientUserStr); } catch {}
+
+    const effectiveAuthUserId = authUser?.id || cachedAuthUser?.id || payload.user_id || null;
+    let clientUserId: string | null = payload.opened_by || null;
+    let cashierName: string = 'الكاشير';
+
+    if (cachedClientUser && cachedClientUser.client_id === payload.client_id) {
+      clientUserId = clientUserId || cachedClientUser.id;
+      cashierName = cachedClientUser.name || cashierName;
+    }
+
+    // If online and we have an auth user, verify/resolve against client_users table
+    if (typeof navigator !== 'undefined' && navigator.onLine && (effectiveAuthUserId || authUser?.email)) {
+      try {
+        if (effectiveAuthUserId) {
+          const { data: cuList } = await supabase
+            .from('client_users')
+            .select('id, client_id, name, status, role')
+            .eq('client_id', payload.client_id)
+            .or(`auth_user_id.eq.${effectiveAuthUserId},id.eq.${effectiveAuthUserId}`)
+            .eq('status', 'active')
+            .limit(1);
+
+          if (cuList && cuList.length > 0) {
+            clientUserId = cuList[0].id;
+            cashierName = cuList[0].name || cashierName;
+          }
+        }
+
+        if (!clientUserId && authUser?.email) {
+          const { data: cuByEmail } = await supabase
+            .from('client_users')
+            .select('id, client_id, name, status, role')
+            .eq('client_id', payload.client_id)
+            .ilike('email', authUser.email.trim().toLowerCase())
+            .eq('status', 'active')
+            .limit(1);
+
+          if (cuByEmail && cuByEmail.length > 0) {
+            clientUserId = cuByEmail[0].id;
+            cashierName = cuByEmail[0].name || cashierName;
+          }
+        }
+      } catch (e) {
+        console.warn('Could not query client_users from client:', e);
+      }
+    }
+
+    const finalOpenedBy = clientUserId || effectiveAuthUserId;
+
+    // Requirement 7: If no authenticated user can be resolved, DO NOT send NULL or proceed
+    if (!finalOpenedBy) {
+      throw new Error('تعذر تحديد حساب الكاشير. يرجى تسجيل الدخول مرة أخرى.');
+    }
+
+    // 0. Offline creation if network disconnected (Requirement 6)
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineShiftId = `OFF-SHIFT-${Date.now()}`;
+      const shiftNumber = `SH-OFF-${Date.now().toString().slice(-4)}`;
+      const offlineShift: Shift = {
+        id: offlineShiftId,
+        client_id: payload.client_id,
+        warehouse_id: payload.warehouse_id,
+        register_id: payload.register_id || 'reg-offline',
+        shift_number: shiftNumber,
+        opened_by: finalOpenedBy,
+        opened_at: new Date().toISOString(),
+        opening_cash: Number(payload.opening_cash || 0),
+        status: 'open',
+        opening_notes: payload.opening_notes || 'وردية تم فتحها بدون اتصال بالإنترنت',
+        cashier_name: cashierName,
+        register_name: 'نقطة البيع الرئيسية',
+        warehouse_name: 'المستودع الرئيسي',
+        closing_cash_expected: Number(payload.opening_cash || 0),
+        cash_difference: 0,
+        total_sales_amount: 0,
+        total_cash_sales: 0,
+        total_card_sales: 0,
+        total_other_sales: 0,
+        total_refunds_amount: 0,
+        total_cash_in: 0,
+        total_cash_out: 0,
+        orders_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await offlineStorage.saveCurrentShift(payload.client_id, offlineShift);
+      try {
+        localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(offlineShift));
+      } catch {}
+
+      return {
+        success: true,
+        shift_id: offlineShift.id,
+        shift_number: offlineShift.shift_number,
+      };
+    }
+
+    // 1. Primary: Server endpoint (passes user credentials and ensures DB foreign keys)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionData?.session?.access_token) {
+        headers['Authorization'] = `Bearer ${sessionData.session.access_token}`;
+      }
+
       const res = await fetch('/api/shifts/open', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           clientId: payload.client_id,
           warehouseId: payload.warehouse_id,
@@ -115,12 +280,46 @@ export const shiftService = {
           openingCash: payload.opening_cash,
           openingNotes: payload.opening_notes || null,
           deviceFingerprint: payload.device_fingerprint || null,
+          deviceId: payload.device_id || null,
+          userId: effectiveAuthUserId,
+          clientUserId: finalOpenedBy,
         }),
       });
 
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.shift_id) {
+          const effectiveOpenedByInShift = json.opened_by || finalOpenedBy;
+          const effectiveCashierNameInShift = json.cashier_name || cashierName;
+          const newShift: Shift = {
+            id: json.shift_id,
+            client_id: payload.client_id,
+            shift_number: json.shift_number,
+            status: 'open',
+            opened_at: new Date().toISOString(),
+            opened_by: effectiveOpenedByInShift,
+            cashier_name: effectiveCashierNameInShift,
+            register_id: json.register_id || payload.register_id || 'reg-default',
+            register_name: 'نقطة البيع',
+            warehouse_id: payload.warehouse_id,
+            warehouse_name: 'المستودع الرئيسي',
+            opening_cash: Number(payload.opening_cash || 0),
+            opening_notes: payload.opening_notes || null,
+            closing_cash_expected: Number(payload.opening_cash || 0),
+            cash_difference: 0,
+            total_sales_amount: 0,
+            total_cash_sales: 0,
+            total_card_sales: 0,
+            total_other_sales: 0,
+            total_refunds_amount: 0,
+            total_cash_in: 0,
+            total_cash_out: 0,
+            orders_count: 0,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          offlineStorage.saveCurrentShift(payload.client_id, newShift).catch(() => {});
+          try { localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(newShift)); } catch {}
           return json;
         }
       } else {
@@ -136,8 +335,12 @@ export const shiftService = {
       console.warn('Server shift open failed or offline, trying fallback...', apiErr);
     }
 
-    // 2. Direct Supabase Fallback
+    // 2. Direct Supabase Fallback (Strictly non-null opened_by)
     try {
+      if (!finalOpenedBy) {
+        throw new Error('تعذر تحديد حساب الكاشير. يرجى تسجيل الدخول مرة أخرى.');
+      }
+
       let registerId = payload.register_id;
       if (!registerId) {
         const { data: regs } = await supabase
@@ -155,14 +358,6 @@ export const shiftService = {
         .eq('client_id', payload.client_id);
       const shiftNumber = 'SH-' + String((count || 0) + 1).padStart(6, '0');
 
-      const { data: userRecord } = await supabase
-        .from('client_users')
-        .select('id')
-        .eq('client_id', payload.client_id)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle();
-
       const shiftId = (typeof crypto !== 'undefined' && crypto.randomUUID)
         ? crypto.randomUUID()
         : 'sh_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
@@ -175,7 +370,7 @@ export const shiftService = {
           warehouse_id: payload.warehouse_id,
           register_id: registerId || null,
           shift_number: shiftNumber,
-          opened_by: userRecord?.id || null,
+          opened_by: finalOpenedBy,
           opened_at: new Date().toISOString(),
           opening_cash: Number(payload.opening_cash || 0),
           status: 'open',
@@ -192,6 +387,36 @@ export const shiftService = {
           .update({ status: 'open' })
           .eq('id', registerId);
       }
+
+      const newShift: Shift = {
+        id: insertedShift.id,
+        client_id: payload.client_id,
+        shift_number: insertedShift.shift_number,
+        status: 'open',
+        opened_at: insertedShift.opened_at,
+        opened_by: insertedShift.opened_by,
+        cashier_name: cashierName,
+        register_id: registerId || 'reg-default',
+        register_name: 'نقطة البيع',
+        warehouse_id: payload.warehouse_id,
+        warehouse_name: 'المستودع الرئيسي',
+        opening_cash: Number(payload.opening_cash || 0),
+        opening_notes: payload.opening_notes || null,
+        closing_cash_expected: Number(payload.opening_cash || 0),
+        cash_difference: 0,
+        total_sales_amount: 0,
+        total_cash_sales: 0,
+        total_card_sales: 0,
+        total_other_sales: 0,
+        total_refunds_amount: 0,
+        total_cash_in: 0,
+        total_cash_out: 0,
+        orders_count: 0,
+        created_at: insertedShift.opened_at,
+        updated_at: insertedShift.opened_at,
+      };
+      offlineStorage.saveCurrentShift(payload.client_id, newShift).catch(() => {});
+      try { localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(newShift)); } catch {}
 
       return {
         success: true,
@@ -220,6 +445,35 @@ export const shiftService = {
     total_refunds_amount: number;
     orders_count: number;
   }> {
+    // 0. Offline closing
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const cachedShift = await offlineStorage.getCurrentShift(payload.client_id);
+      const openingCash = Number(cachedShift?.opening_cash || 0);
+      const totalSales = Number(cachedShift?.total_sales_amount || 0);
+      const expectedCash = openingCash + Number(cachedShift?.total_cash_sales || 0);
+      const actualCash = Number(payload.closing_cash_actual || 0);
+      const diff = actualCash - expectedCash;
+
+      await offlineStorage.saveCurrentShift(payload.client_id, null);
+      try {
+        localStorage.removeItem(`ordexa_active_shift_${payload.client_id}`);
+      } catch {}
+
+      return {
+        success: true,
+        shift_id: payload.shift_id,
+        shift_number: cachedShift?.shift_number || 'SH-OFFLINE',
+        closing_cash_actual: actualCash,
+        closing_cash_expected: expectedCash,
+        cash_difference: diff,
+        total_sales_amount: totalSales,
+        total_cash_sales: Number(cachedShift?.total_cash_sales || 0),
+        total_card_sales: Number(cachedShift?.total_card_sales || 0),
+        total_refunds_amount: Number(cachedShift?.total_refunds_amount || 0),
+        orders_count: Number(cachedShift?.orders_count || 0),
+      };
+    }
+
     // 1. Primary: Server atomic reconciliation
     try {
       const res = await fetch('/api/shifts/close', {
@@ -236,6 +490,8 @@ export const shiftService = {
       if (res.ok) {
         const json = await res.json();
         if (json.success) {
+          offlineStorage.saveCurrentShift(payload.client_id, null).catch(() => {});
+          try { localStorage.removeItem(`ordexa_active_shift_${payload.client_id}`); } catch {}
           return json;
         }
       } else {

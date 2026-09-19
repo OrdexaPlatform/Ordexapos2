@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Store, DollarSign, AlertCircle, X, Laptop } from 'lucide-react';
+import { Store, DollarSign, AlertCircle, X, Laptop, UserCheck } from 'lucide-react';
 import { useShiftStore } from '../../../store/shiftStore';
 import { useAuthStore } from '../../../store/authStore';
 import { useDeviceStore } from '../../../store/deviceStore';
@@ -20,7 +20,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
   onClose,
   defaultWarehouseId,
 }) => {
-  const { clientUser } = useAuthStore();
+  const { clientUser, user } = useAuthStore();
   const clientId = clientUser?.client_id;
   const { openShift, isLoading } = useShiftStore();
   const { fingerprint, deviceName, isActivated, device } = useDeviceStore();
@@ -77,7 +77,15 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientId) return;
+    if (!clientId) {
+      toast.error('تعذر تحديد بيانات المنشأة.');
+      return;
+    }
+
+    if (!user?.id && !clientUser?.id) {
+      toast.error('تعذر تحديد حساب الكاشير. يرجى تسجيل الدخول مرة أخرى.');
+      return;
+    }
 
     if (!selectedWarehouseId) {
       toast.error('يرجى تحديد الفرع أو المستودع');
@@ -98,6 +106,8 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
         device_fingerprint: fingerprint,
         opening_cash: openingCash,
         opening_notes: notes.trim() || undefined,
+        user_id: user?.id,
+        opened_by: clientUser?.id,
       });
 
       toast.success('تم فتح الوردية بنجاح! جاهز لبدء البيع');
@@ -138,25 +148,46 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {/* Terminal / Hardware Binding Info */}
-          <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                isActivated ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-              }`}>
-                <Laptop className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                  <span>{device?.device_name || deviceName}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                    isActivated ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
-                  }`}>
-                    {isActivated ? 'معتمد' : 'غير مسجل'}
-                  </span>
+          {/* Terminal & Cashier Binding Info */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                  isActivated ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  <Laptop className="w-4 h-4" />
                 </div>
-                <div className="text-[10px] font-mono text-slate-500">
-                  بصمة الجهاز: {fingerprint}
+                <div>
+                  <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>{device?.device_name || deviceName}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                      isActivated ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                    }`}>
+                      {isActivated ? 'معتمد' : 'غير مسجل'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500">
+                    بصمة الجهاز: {fingerprint}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>{clientUser?.name || 'الكاشير'}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                      {clientUser?.role === 'owner' ? 'مالك' : clientUser?.role === 'admin' ? 'مدير' : 'كاشير'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-mono text-slate-500">
+                    معرف الحساب: {clientUser?.id ? `${clientUser.id.substring(0, 8)}...` : 'غير متصل'}
+                  </div>
                 </div>
               </div>
             </div>

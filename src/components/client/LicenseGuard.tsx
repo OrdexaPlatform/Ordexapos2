@@ -4,6 +4,7 @@ import { useClientStore } from '../../store/clientStore';
 import { useAuthStore } from '../../store/authStore';
 import { ShieldAlert, AlertTriangle, XCircle, Clock, LogOut, RefreshCw, Layers } from 'lucide-react';
 import { format } from 'date-fns';
+import { offlineStorage } from '../../lib/offline/offlineStorage';
 
 interface LicenseGuardProps {
   children: React.ReactNode;
@@ -14,6 +15,17 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
   const { client, license, effectiveLicenseStatus, loading, loadClient } = useClientStore();
   const { signOut, isSuperAdmin } = useAuthStore();
   const [reloading, setReloading] = React.useState(false);
+  const [offlinePermitted, setOfflinePermitted] = React.useState(false);
+
+  React.useEffect(() => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine && client?.id) {
+      offlineStorage.verifyOfflineGracePeriod(client.id).then(res => {
+        if (res.permitted) {
+          setOfflinePermitted(true);
+        }
+      });
+    }
+  }, [client?.id]);
 
   // Super Admin bypass: Super Admins are never blocked by Client License checks
   if (isSuperAdmin) {
@@ -39,8 +51,8 @@ export function LicenseGuard({ children }: LicenseGuardProps) {
     );
   }
 
-  // Active license - allow through
-  if (effectiveLicenseStatus === 'active') {
+  // Active license or verified offline grace period - allow through
+  if (effectiveLicenseStatus === 'active' || offlinePermitted) {
     return <>{children}</>;
   }
 

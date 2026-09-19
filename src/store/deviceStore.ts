@@ -142,8 +142,14 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           licenseKey: result.license.license_key || 'VALIDATED_LICENSE',
           deviceFingerprint: currentFp,
           status: 'active',
-          maxOfflineHours: 24
+          maxOfflineHours: 168
         });
+        try {
+          localStorage.setItem(`ordexa_device_registered_${clientId}`, 'true');
+          if (result.device) {
+            localStorage.setItem(`ordexa_device_${clientId}`, JSON.stringify(result.device));
+          }
+        } catch {}
       }
       return result;
     } catch (err) {
@@ -270,6 +276,34 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       errorMessage: null 
     });
 
+    // Offline early exit if offline with valid license/grace
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const validation = await get().validateLicense(clientId);
+      if (validation && validation.is_valid) {
+        let cachedDev: any = null;
+        try {
+          const rawDev = clientId ? localStorage.getItem(`ordexa_device_${clientId}`) : null;
+          if (rawDev) cachedDev = JSON.parse(rawDev);
+        } catch {}
+
+        set({
+          status: 'active',
+          isActivated: true,
+          errorMessage: null,
+          device: cachedDev || get().device || {
+            id: 'offline-device',
+            device_name: get().deviceName || 'جهاز نقطة البيع',
+            device_fingerprint: currentFp,
+            status: 'active',
+            is_active: true,
+            is_registered: true,
+            client_id: clientId,
+          } as any
+        });
+        return;
+      }
+    }
+
     try {
       // 2. Run validation for client & license
       const validation = await get().validateLicense(clientId);
@@ -287,8 +321,9 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       const { data, error } = await query.maybeSingle();
 
       if (error) {
-        // If offline and license validation succeeded via offline grace period
-        if (get().isOfflineGraceActive && get().licenseValidation?.is_valid) {
+        // If offline and license validation succeeded via offline grace period or local registration
+        const isRegisteredLocally = clientId && typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
+        if ((get().isOfflineGraceActive && get().licenseValidation?.is_valid) || isRegisteredLocally) {
           set({
             status: 'active',
             isActivated: true,

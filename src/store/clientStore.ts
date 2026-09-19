@@ -96,6 +96,27 @@ export const useClientStore = create<ClientState>((set, get) => ({
     const normalizedCode = clientCode.trim();
     set({ loading: true, error: null });
 
+    // 0. Immediate offline cache check if offline
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        const cachedRaw = localStorage.getItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`)
+          || localStorage.getItem(`ordexa_cached_client_${normalizedCode}`);
+        if (cachedRaw) {
+          const cachedClient = JSON.parse(cachedRaw) as Client;
+          updateDynamicManifestLink(cachedClient.client_code, cachedClient.business_name);
+          set({
+            client: cachedClient,
+            effectiveLicenseStatus: 'active',
+            loading: false,
+            error: null,
+          });
+          return cachedClient;
+        }
+      } catch (err) {
+        console.warn('Offline client cache read error:', err);
+      }
+    }
+
     try {
       // 1. Try public API first (fast & secure server-side isolation when running with custom server)
       try {
@@ -111,6 +132,7 @@ export const useClientStore = create<ClientState>((set, get) => ({
               localStorage.setItem(`ordexa_cached_client_${clientData.id}`, JSON.stringify(clientData));
               localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(clientData));
               localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
+              offlineStorage.saveCachedClient(clientData).catch(() => {});
             } catch {
               // Storage quota full or restricted
             }
@@ -149,11 +171,28 @@ export const useClientStore = create<ClientState>((set, get) => ({
 
       if (dbErr) {
         console.warn('Supabase query for client code failed:', dbErr);
+        // Check offline cache on error
+        try {
+          const cachedRaw = localStorage.getItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`)
+            || localStorage.getItem(`ordexa_cached_client_${normalizedCode}`);
+          if (cachedRaw) {
+            const cachedClient = JSON.parse(cachedRaw) as Client;
+            updateDynamicManifestLink(cachedClient.client_code, cachedClient.business_name);
+            set({
+              client: cachedClient,
+              effectiveLicenseStatus: 'active',
+              loading: false,
+              error: null,
+            });
+            return cachedClient;
+          }
+        } catch {}
       } else if (dbClient) {
         try {
           localStorage.setItem(`ordexa_cached_client_${dbClient.id}`, JSON.stringify(dbClient));
           localStorage.setItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`, JSON.stringify(dbClient));
           localStorage.setItem('ordexa_last_client_code', normalizedCode.toUpperCase());
+          offlineStorage.saveCachedClient(dbClient).catch(() => {});
         } catch {}
 
         updateDynamicManifestLink(dbClient.client_code, dbClient.business_name);
@@ -170,6 +209,11 @@ export const useClientStore = create<ClientState>((set, get) => ({
             .limit(1)
             .maybeSingle();
           dbLicense = lic;
+          if (lic) {
+            try {
+              localStorage.setItem(`ordexa_cached_license_${dbClient.id}`, JSON.stringify(lic));
+            } catch {}
+          }
         } catch (licErr) {
           console.warn('Could not load active license for client:', licErr);
         }
@@ -212,7 +256,8 @@ export const useClientStore = create<ClientState>((set, get) => ({
 
       // 3. Offline Cache Fallback
       try {
-        const cachedRaw = localStorage.getItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`);
+        const cachedRaw = localStorage.getItem(`ordexa_cached_client_by_code_${normalizedCode.toUpperCase()}`)
+          || localStorage.getItem(`ordexa_cached_client_${normalizedCode}`);
         if (cachedRaw) {
           const cachedClient = JSON.parse(cachedRaw) as Client;
           updateDynamicManifestLink(cachedClient.client_code, cachedClient.business_name);
@@ -242,6 +287,24 @@ export const useClientStore = create<ClientState>((set, get) => ({
     }
 
     set({ loading: true, error: null });
+
+    // Immediate offline check
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        const localClient = localStorage.getItem(`ordexa_cached_client_${clientId}`);
+        if (localClient) {
+          const parsed = JSON.parse(localClient);
+          set({
+            client: parsed,
+            license: null,
+            effectiveLicenseStatus: 'active',
+            loading: false,
+            error: null,
+          });
+          return;
+        }
+      } catch {}
+    }
 
     try {
       // 1. Try secure backend server route first (guaranteed isolation & reliable auth)

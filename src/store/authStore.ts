@@ -38,11 +38,55 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     isInitializing = true;
 
     try {
+      // Offline fallback check first
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const cachedCuStr = localStorage.getItem('ordexa_cached_client_user');
+        const cachedUserStr = localStorage.getItem('ordexa_cached_auth_user');
+        const cachedType = (localStorage.getItem('ordexa_cached_user_type') as any) || 'client_user';
+        if (cachedCuStr) {
+          try {
+            const cachedCu = JSON.parse(cachedCuStr);
+            const cachedUser = cachedUserStr ? JSON.parse(cachedUserStr) : { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
+            set({
+              user: cachedUser,
+              session: null,
+              userType: cachedType,
+              isSuperAdmin: cachedType === 'super_admin',
+              clientUser: cachedType === 'client_user' ? (cachedCu as ClientUser) : null,
+              initialized: true,
+              loading: false,
+            });
+            return;
+          } catch (e) {
+            console.warn('Failed to parse cached auth:', e);
+          }
+        }
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       
       if (session?.user) {
         await get().determineUserRole(session.user, session);
       } else {
+        // Double check cached offline user before clearing
+        const cachedCuStr = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_cached_client_user') : null;
+        if (cachedCuStr && typeof navigator !== 'undefined' && !navigator.onLine) {
+          try {
+            const cachedCu = JSON.parse(cachedCuStr);
+            const cachedUser = { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
+            set({
+              user: cachedUser as any,
+              session: null,
+              userType: 'client_user',
+              isSuperAdmin: false,
+              clientUser: cachedCu as ClientUser,
+              initialized: true,
+              loading: false,
+            });
+            return;
+          } catch {}
+        }
+
         set({ 
           user: null, 
           session: null, 
@@ -254,6 +298,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             console.warn('Activity log for login failed:', logErr);
           }
 
+          // Cache user credentials for offline POS continuity
+          try {
+            localStorage.setItem('ordexa_cached_client_user', JSON.stringify(clientUserData));
+            localStorage.setItem('ordexa_cached_auth_user', JSON.stringify(user));
+            localStorage.setItem('ordexa_cached_user_type', 'client_user');
+          } catch {}
+
           set({
             user,
             session,
@@ -272,9 +323,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         console.warn('Client users table query warning:', err);
       }
 
+      // Fallback to offline cached user if offline or network unavailable
+      const cachedCuStr = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_cached_client_user') : null;
+      if (cachedCuStr && (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        try {
+          const cachedCu = JSON.parse(cachedCuStr);
+          set({
+            user,
+            session,
+            userType: 'client_user',
+            isSuperAdmin: false,
+            clientUser: cachedCu as ClientUser,
+            initialized: true,
+            loading: false,
+          });
+          return;
+        } catch {}
+      }
+
       // Neither active super admin nor active client user
       console.warn('User has no active roles in Ordexa system.');
-      await supabase.auth.signOut();
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        await supabase.auth.signOut();
+      }
       set({ 
         user: null, 
         session: null, 

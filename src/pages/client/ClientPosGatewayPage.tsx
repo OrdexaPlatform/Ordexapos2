@@ -9,6 +9,7 @@ import { POSPage } from './POS';
 import { ClientPOSLayout } from '../../components/client/ClientPOSLayout';
 import { LicenseGuard } from '../../components/client/LicenseGuard';
 import { DeviceGuard } from '../../components/client/DeviceGuard';
+import { offlineStorage } from '../../lib/offline/offlineStorage';
 import { 
   Store, 
   Loader2, 
@@ -57,8 +58,56 @@ export const ClientPosGatewayPage: React.FC = () => {
   useEffect(() => {
     if (clientCode) {
       loadClientByCode(clientCode);
+    } else {
+      const lastCode = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_last_client_code') : null;
+      if (lastCode) {
+        loadClientByCode(lastCode);
+      }
     }
   }, [clientCode, loadClientByCode]);
+
+  // Offline recovery effect: immediately populate client and auth if offline
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (!client) {
+        const code = clientCode || (typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_last_client_code') : null);
+        if (code) {
+          const raw = localStorage.getItem(`ordexa_cached_client_by_code_${code.toUpperCase()}`);
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              useClientStore.setState({ client: parsed, effectiveLicenseStatus: 'active', loading: false });
+            } catch {}
+          }
+        }
+        offlineStorage.getCachedClient().then(c => {
+          if (c && !useClientStore.getState().client) {
+            useClientStore.setState({ client: c, effectiveLicenseStatus: 'active', loading: false });
+          }
+        }).catch(() => {});
+      }
+
+      // Check cached user
+      if (!user || !clientUser) {
+        const cachedCuStr = localStorage.getItem('ordexa_cached_client_user');
+        if (cachedCuStr) {
+          try {
+            const cachedCu = JSON.parse(cachedCuStr);
+            const cachedUser = { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
+            useAuthStore.setState({
+              user: cachedUser as any,
+              session: null,
+              userType: 'client_user',
+              isSuperAdmin: false,
+              clientUser: cachedCu,
+              initialized: true,
+              loading: false,
+            });
+          } catch {}
+        }
+      }
+    }
+  }, [clientCode, client, user, clientUser]);
 
   // 2. Initialize device verification when authenticated with client user
   const initDeviceRef = useRef<string | null>(null);
@@ -71,8 +120,9 @@ export const ClientPosGatewayPage: React.FC = () => {
     }
   }, [user, clientUser?.client_id, client?.id, initializeDevice]);
 
-  // Loading state while resolving client configuration or auth session
-  if ((clientLoading && !client) || (!authInitialized && authLoading)) {
+  // Loading state while resolving client configuration or auth session (only when online or still resolving)
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (!isOffline && ((clientLoading && !client) || (!authInitialized && authLoading))) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4" dir="rtl">
         <div className="text-center space-y-4">

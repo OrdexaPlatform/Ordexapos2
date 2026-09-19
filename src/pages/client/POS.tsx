@@ -213,6 +213,19 @@ export const POSPage: React.FC = () => {
         }
       }
 
+      if (loadedWarehouses.length === 0) {
+        loadedWarehouses = [{
+          id: 'default-warehouse',
+          client_id: clientId,
+          name: 'المستودع الرئيسي',
+          code: 'WH-01',
+          is_active: true,
+          is_default: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as Warehouse];
+      }
+
       if (loadedWarehouses.length > 0) {
         setWarehouses(loadedWarehouses);
         if (!selectedWarehouseId) {

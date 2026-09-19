@@ -548,6 +548,8 @@ export interface OpenShiftPayload {
   device_fingerprint?: string;
   opening_cash: number;
   opening_notes?: string;
+  user_id?: string;
+  opened_by?: string;
 }
 
 export interface CloseShiftPayload {

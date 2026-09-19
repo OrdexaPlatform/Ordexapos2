@@ -79,8 +79,11 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
     );
   }
 
-  // If the device is active and verified, render the POS app children
-  if (isActivated && status === 'active') {
+  // If the device is active and verified (or offline with previous local registration), render the POS app children
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  const isRegisteredLocally = client?.id && typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${client.id}`);
+  
+  if ((isActivated && status === 'active') || (isOffline && (isRegisteredLocally || useDeviceStore.getState().isOfflineGraceActive))) {
     return <>{children}</>;
   }
 

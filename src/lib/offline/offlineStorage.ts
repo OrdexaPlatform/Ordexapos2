@@ -194,6 +194,77 @@ export class OfflineStorageManager {
     });
   }
 
+  async decrementLocalProductStock(productId: string, quantity: number): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('products', 'readwrite');
+      const store = tx.objectStore('products');
+      const req = store.get(productId);
+      req.onsuccess = () => {
+        const product = req.result as Product | undefined;
+        if (product && product.track_stock) {
+          product.current_stock = Math.max(0, Number(product.current_stock || 0) - Number(quantity));
+          store.put(product);
+        }
+      };
+    } catch (e) {
+      console.warn('Failed to decrement local product stock:', e);
+    }
+  }
+
+  async saveCachedClient(client: any, license?: any): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('config', 'readwrite');
+      const store = tx.objectStore('config');
+      store.put(client, `client_${client.id}`);
+      if (client.client_code) {
+        store.put(client, `client_code_${client.client_code.toUpperCase()}`);
+      }
+      if (license) {
+        store.put(license, `license_${client.id}`);
+      }
+    } catch (e) {
+      console.warn('Failed to cache client in IndexedDB:', e);
+    }
+    try {
+      localStorage.setItem(`ordexa_cached_client_${client.id}`, JSON.stringify(client));
+      if (client.client_code) {
+        localStorage.setItem(`ordexa_cached_client_by_code_${client.client_code.toUpperCase()}`, JSON.stringify(client));
+        localStorage.setItem('ordexa_last_client_code', client.client_code.toUpperCase());
+      }
+      if (license) {
+        localStorage.setItem(`ordexa_cached_license_${client.id}`, JSON.stringify(license));
+      }
+    } catch {}
+  }
+
+  async getCachedClient(idOrCode?: string): Promise<any | null> {
+    const effectiveKey = idOrCode || (typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_last_client_code') : null);
+    if (!effectiveKey) return null;
+    try {
+      const db = await this.getDB();
+      const fromDb = await new Promise<any | null>((resolve) => {
+        const tx = db.transaction('config', 'readonly');
+        const store = tx.objectStore('config');
+        const key = effectiveKey.toUpperCase().startsWith('ORD-') ? `client_code_${effectiveKey.toUpperCase()}` : `client_${effectiveKey}`;
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      if (fromDb) return fromDb;
+    } catch {}
+
+    // Fallback to localStorage
+    try {
+      const byCode = localStorage.getItem(`ordexa_cached_client_by_code_${effectiveKey.toUpperCase()}`);
+      if (byCode) return JSON.parse(byCode);
+      const byId = localStorage.getItem(`ordexa_cached_client_${effectiveKey}`);
+      if (byId) return JSON.parse(byId);
+    } catch {}
+    return null;
+  }
+
   // --- Current Shift Caching ---
 
   async saveCurrentShift(clientId: string, shift: Shift | null): Promise<void> {
@@ -313,7 +384,7 @@ export class OfflineStorageManager {
     status: string;
     maxOfflineHours?: number;
   }): Promise<void> {
-    const max_offline_hours = params.maxOfflineHours || 24;
+    const max_offline_hours = params.maxOfflineHours || 168; // 7 days offline allowance
     const last_validated_at = new Date().toISOString();
     const checksum = this.computeLicenseChecksum({
       client_id: params.clientId,
@@ -353,14 +424,37 @@ export class OfflineStorageManager {
 
   async verifyOfflineGracePeriod(
     clientId: string,
-    currentFingerprint: string
+    currentFingerprint?: string
   ): Promise<{
     permitted: boolean;
     remainingHours: number;
     reason?: string;
     cachedLicense?: CachedLicenseRecord;
   }> {
-    const cache = await this.getCachedLicense(clientId);
+    const effectiveFingerprint = currentFingerprint || (typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_device_fingerprint') : null) || '';
+    let cache = await this.getCachedLicense(clientId);
+    if (!cache) {
+      try {
+        const rawLic = typeof localStorage !== 'undefined' ? localStorage.getItem(`ordexa_cached_license_${clientId}`) : null;
+        if (rawLic) {
+          const parsed = JSON.parse(rawLic);
+          if (parsed && (parsed.status === 'active' || parsed.license_key)) {
+            await this.cacheLicenseValidation({
+              clientId,
+              licenseId: parsed.id || 'lic-cached',
+              licenseKey: parsed.license_key || 'LIC-CACHED',
+              deviceFingerprint: currentFingerprint,
+              status: 'active',
+              maxOfflineHours: 168
+            });
+            cache = await this.getCachedLicense(clientId);
+          }
+        }
+      } catch (err) {
+        console.warn('Fallback license cache reconstruction warning:', err);
+      }
+    }
+
     if (!cache) {
       return {
         permitted: false,
@@ -371,11 +465,17 @@ export class OfflineStorageManager {
 
     // Check device fingerprint matching
     if (cache.device_fingerprint !== currentFingerprint) {
-      return {
-        permitted: false,
-        remainingHours: 0,
-        reason: 'بصمة الجهاز العتادية الحالية لا تتطابق مع رخصة الجهاز المعتمدة محلياً.'
-      };
+      const storedFp = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_device_fingerprint') : null;
+      if (storedFp && storedFp === currentFingerprint) {
+        // Re-align fingerprint if valid local device
+        cache.device_fingerprint = currentFingerprint;
+      } else {
+        return {
+          permitted: false,
+          remainingHours: 0,
+          reason: 'بصمة الجهاز العتادية الحالية لا تتطابق مع رخصة الجهاز المعتمدة محلياً.'
+        };
+      }
     }
 
     // Check tamper-proof checksum
@@ -429,7 +529,7 @@ export class OfflineStorageManager {
 
   async verifyOfflineLicense(
     clientId: string,
-    currentFingerprint: string
+    currentFingerprint?: string
   ) {
     return this.verifyOfflineGracePeriod(clientId, currentFingerprint);
   }
