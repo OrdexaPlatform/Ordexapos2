@@ -247,6 +247,8 @@ export interface Product {
   barcode?: string | null;
   name: string;
   description?: string | null;
+  image_url?: string | null;
+  image?: string | null;
   category_id?: string | null;
   brand_id?: string | null;
   unit_id?: string | null;

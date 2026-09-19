@@ -99,7 +99,6 @@ export const POSPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [barcodeInput, setBarcodeInput] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Modals
@@ -112,7 +111,6 @@ export const POSPage: React.FC = () => {
   const [itemPriceInputValue, setItemPriceInputValue] = useState<number>(0);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const barcodeInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch initial catalog data with offline resilience
   const loadPOSData = async () => {
@@ -204,11 +202,14 @@ export const POSPage: React.FC = () => {
       if (loadedProducts.length === 0) {
         const cachedProds = await offlineStorage.getProducts();
         if (cachedProds && cachedProds.length > 0) {
-          loadedProducts = cachedProds.filter(p => !p.client_id || p.client_id === clientId);
+          loadedProducts = cachedProds.filter(p => p.client_id === clientId);
         } else {
           try {
             const raw = localStorage.getItem(`ordexa_cached_products_${clientId}`);
-            if (raw) loadedProducts = JSON.parse(raw);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              loadedProducts = (Array.isArray(parsed) ? parsed : []).filter((p: Product) => p.client_id === clientId);
+            }
           } catch {}
         }
       }
@@ -294,7 +295,35 @@ export const POSPage: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cartItems.length, isPaymentModalOpen, isReceiptModalOpen, isOpenShiftModalOpen, activeShift]);
 
-  // Filtered Products
+  // Arabic text normalization for fast, resilient Arabic partial search
+  const normalizeArabic = (text: string = ''): string => {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[\u064B-\u065F]/g, '') // remove tashkeel (fatḥah, ḍammah, kasrah, etc.)
+      .replace(/[أإآٱ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/[ىي]/g, 'ي');
+  };
+
+  // Helper to find exact product by primary barcode, alternate barcodes, or SKU
+  const findExactBarcodeOrSkuProduct = (query: string): Product | undefined => {
+    const clean = query.trim();
+    if (!clean) return undefined;
+    const lowerClean = clean.toLowerCase();
+
+    return products.find(p => {
+      // 1. Exact primary barcode match
+      if (p.barcode && p.barcode.trim() === clean) return true;
+      // 2. Exact alternate barcodes match
+      if (p.barcodes && p.barcodes.some(b => b.barcode && b.barcode.trim() === clean)) return true;
+      // 3. Exact SKU match (case-insensitive)
+      if (p.sku && p.sku.trim().toLowerCase() === lowerClean) return true;
+      return false;
+    });
+  };
+
+  // Filtered Products (Fast in-memory, partial search, arabic normalization, SKU & Barcode)
   const filteredProducts = useMemo(() => {
     let result = products;
 
@@ -302,63 +331,106 @@ export const POSPage: React.FC = () => {
       result = result.filter(p => p.category_id === selectedCategory);
     }
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
+    const query = searchQuery.trim();
+    if (query) {
+      const rawQ = query.toLowerCase();
+      const normQ = normalizeArabic(query);
+      const noSpaceQ = normQ.replace(/\s+/g, '');
+
       result = result.filter(p => {
-        const nameMatch = p.name.toLowerCase().includes(q);
-        const skuMatch = p.sku.toLowerCase().includes(q);
-        const barcodeMatch = p.barcode?.toLowerCase().includes(q);
-        const altBarcodeMatch = p.barcodes?.some(b => b.barcode.toLowerCase().includes(q));
-        return nameMatch || skuMatch || barcodeMatch || altBarcodeMatch;
+        const pName = (p.name || '').toLowerCase();
+        const pNameNorm = normalizeArabic(p.name || '');
+        const pNameNoSpace = pNameNorm.replace(/\s+/g, '');
+        const pSku = (p.sku || '').toLowerCase();
+        const pBarcode = (p.barcode || '').toLowerCase();
+        const altBarcodes = (p.barcodes || []).map(b => (b.barcode || '').toLowerCase());
+
+        // Partial Name match (raw, normalized, or without space)
+        const nameMatch = pName.includes(rawQ) || pNameNorm.includes(normQ) || pNameNoSpace.includes(noSpaceQ);
+        // Partial SKU / Product code match
+        const skuMatch = pSku.includes(rawQ);
+        // Partial Barcode match (primary or alternate barcodes)
+        const barcodeMatch = pBarcode.includes(rawQ) || altBarcodes.some(b => b.includes(rawQ));
+
+        return nameMatch || skuMatch || barcodeMatch;
       });
     }
 
     return result;
   }, [products, selectedCategory, searchQuery]);
 
-  // Handle Barcode Scanner Direct Input
-  const handleBarcodeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const barcode = barcodeInput.trim();
-    if (!barcode) return;
+  // Handle Search Input Change with Instant Barcode Scanner Auto-Detection
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
 
-    // Find product matching primary barcode or barcode list or SKU
-    const foundProduct = products.find(p => 
-      p.barcode === barcode || 
-      p.sku === barcode ||
-      p.barcodes?.some(b => b.barcode === barcode)
-    );
+    const trimmed = value.trim();
+    // Instant Barcode Scanner auto-add:
+    // If entered barcode matches a registered barcode exactly (typical barcode >= 4 digits/chars)
+    if (trimmed.length >= 4) {
+      const exactBarcodeProduct = products.find(p =>
+        (p.barcode && p.barcode.trim() === trimmed) ||
+        (p.barcodes && p.barcodes.some(b => b.barcode && b.barcode.trim() === trimmed))
+      );
 
-    if (foundProduct) {
-      const res = addItem(foundProduct, 1);
-      if (!res.success && res.message) {
-        setErrorMessage(res.message);
-      } else {
-        setErrorMessage(null);
+      if (exactBarcodeProduct) {
+        const res = addItem(exactBarcodeProduct, 1);
+        if (!res.success && res.message) {
+          setErrorMessage(res.message);
+          toast.error(res.message);
+        } else {
+          setErrorMessage(null);
+          toast.success(`تمت إضافة: ${exactBarcodeProduct.name}`, { duration: 1500 });
+          setSearchQuery('');
+        }
       }
-      setBarcodeInput('');
-    } else {
-      setErrorMessage(`الباركود (${barcode}) غير مسجل في النظام`);
-      setBarcodeInput('');
+    }
+  };
+
+  // Handle Search Input Keydown (Enter key behavior)
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = searchQuery.trim();
+      if (!q) return;
+
+      // 1. Check exact barcode or SKU match
+      const exactMatch = findExactBarcodeOrSkuProduct(q);
+      if (exactMatch) {
+        const res = addItem(exactMatch, 1);
+        if (!res.success && res.message) {
+          setErrorMessage(res.message);
+          toast.error(res.message);
+        } else {
+          setErrorMessage(null);
+          toast.success(`تمت إضافة: ${exactMatch.name}`, { duration: 1500 });
+          setSearchQuery('');
+        }
+        return;
+      }
+
+      // 2. If entered value is numeric barcode-like (e.g. 5+ digits) but not found in catalog:
+      if (/^\d{5,18}$/.test(q)) {
+        setErrorMessage(`الباركود (${q}) غير مسجل في النظام`);
+        toast.error(`الباركود (${q}) غير مسجل`);
+      }
+      // Note: As per requirement 9, name search does not auto-add unless exact barcode/SKU match
     }
   };
 
   // Hardware USB/HID Barcode Scanner Listener
   useBarcodeScanner({
     onScan: (scannedBarcode) => {
-      const foundProduct = products.find(p => 
-        p.barcode === scannedBarcode || 
-        p.sku === scannedBarcode ||
-        p.barcodes?.some(b => b.barcode === scannedBarcode)
-      );
+      const foundProduct = findExactBarcodeOrSkuProduct(scannedBarcode);
 
       if (foundProduct) {
         const res = addItem(foundProduct, 1);
         if (!res.success && res.message) {
           setErrorMessage(res.message);
+          toast.error(res.message);
         } else {
           setErrorMessage(null);
           toast.success(`تمت إضافة: ${foundProduct.name}`, { duration: 1500 });
+          setSearchQuery('');
         }
       } else {
         setErrorMessage(`الباركود (${scannedBarcode}) غير مسجل في النظام`);
@@ -598,48 +670,56 @@ export const POSPage: React.FC = () => {
         {/* Left / Center: Catalog & Product Search (Width: ~65%) */}
         <div className="flex-1 flex flex-col border-l border-slate-200 bg-white overflow-hidden">
           
-          {/* Search & Barcode Bar */}
-          <div className="p-3 border-b border-slate-200 bg-slate-50 flex flex-wrap gap-2 items-center shrink-0">
-            
-            {/* Search Input */}
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          {/* Professional Search Bar */}
+          <div className="p-3 border-b border-slate-200 bg-slate-50 shrink-0">
+            <div className="relative w-full">
+              {/* Right Search Icon */}
+              <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600 pointer-events-none" />
+              
+              {/* Main Search Input */}
               <input
                 ref={searchInputRef}
+                id="pos-product-search-input"
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ابحث بالاسم، SKU، أو الباركود [F2]..."
-                className="w-full pr-9 pl-4 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900"
+                onChange={(e) => handleSearchChange(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="ابحث عن اسم المنتج أو الكود..."
+                autoComplete="off"
+                className="w-full pr-10 pl-24 py-2.5 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-slate-900 placeholder:text-slate-400 shadow-2xs transition-all"
               />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
 
-            {/* Quick Barcode Scanner Direct Input */}
-            <form onSubmit={handleBarcodeSubmit} className="relative w-48 sm:w-56">
-              <Barcode className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-indigo-600" />
-              <input
-                ref={barcodeInputRef}
-                type="text"
-                value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                placeholder="مسح الباركود مباشرة..."
-                className="w-full pr-9 pl-8 py-2 text-xs font-mono bg-white border border-indigo-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-slate-900"
-              />
-              <button
-                type="submit"
-                className="absolute left-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-indigo-600"
-              >
-                <CornerDownLeft className="w-3.5 h-3.5" />
-              </button>
-            </form>
+              {/* Left Action Controls (Clear X, Results Counter, F2 Shortcut Badge) */}
+              <div className="absolute left-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                {searchQuery && (
+                  <button
+                    type="button"
+                    id="pos-search-clear-btn"
+                    onClick={() => {
+                      setSearchQuery('');
+                      searchInputRef.current?.focus();
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-700 rounded-md hover:bg-slate-100 transition-colors"
+                    title="مسح البحث"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+
+                {searchQuery && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 hidden sm:inline-block">
+                    {filteredProducts.length} نتيجة
+                  </span>
+                )}
+
+                <span 
+                  className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200 hidden md:inline-block select-none"
+                  title="اضغط F2 للتركيز على البحث"
+                >
+                  F2
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Categories Horizontal Scroller */}
@@ -682,11 +762,14 @@ export const POSPage: React.FC = () => {
             ) : filteredProducts.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-slate-400">
                 <PackageX className="w-10 h-10 mb-2 stroke-1 text-slate-300" />
-                <p className="text-xs font-medium">لم يتم العثور على منتجات مطابقة</p>
+                <p className="text-xs font-medium text-slate-600">لا توجد منتجات مطابقة</p>
                 {searchQuery && (
                   <button
-                    onClick={() => setSearchQuery('')}
-                    className="mt-2 text-xs text-indigo-600 hover:underline"
+                    onClick={() => {
+                      setSearchQuery('');
+                      searchInputRef.current?.focus();
+                    }}
+                    className="mt-2 text-xs text-indigo-600 hover:underline font-medium"
                   >
                     إلغاء البحث وعرض كل الأصناف
                   </button>
@@ -697,10 +780,12 @@ export const POSPage: React.FC = () => {
                 {filteredProducts.map(product => {
                   const isOutOfStock = product.track_stock && Number(product.current_stock || 0) <= 0;
                   const isLowStock = product.track_stock && Number(product.current_stock || 0) <= Number(product.min_stock || 0) && !isOutOfStock;
+                  const productImage = product.image_url || (product as any).image;
 
                   return (
                     <button
                       key={product.id}
+                      id={`pos-product-${product.id}`}
                       onClick={() => !isOutOfStock && handleAddProduct(product)}
                       disabled={isOutOfStock}
                       className={`group relative flex flex-col justify-between p-3 rounded-xl border text-right transition-all select-none ${
@@ -709,14 +794,29 @@ export const POSPage: React.FC = () => {
                           : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-sm active:scale-[0.98]'
                       }`}
                     >
-                      {/* Top Info */}
-                      <div>
+                      {/* Top Info & Image */}
+                      <div className="w-full">
+                        {/* Product Image if present */}
+                        {productImage && (
+                          <div className="w-full h-24 mb-2 overflow-hidden rounded-lg bg-slate-100 border border-slate-100 flex items-center justify-center shrink-0">
+                            <img
+                              src={productImage}
+                              alt={product.name}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          </div>
+                        )}
+
+                        {/* SKU / Code & Stock Badge */}
                         <div className="flex items-start justify-between gap-1 mb-1">
-                          <span className="text-[10px] font-mono text-slate-400 uppercase truncate">
+                          <span className="text-[10px] font-mono text-slate-400 uppercase truncate max-w-[120px]" title={product.sku}>
                             {product.sku}
                           </span>
                           {product.track_stock ? (
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
                               isOutOfStock 
                                 ? 'bg-rose-100 text-rose-700' 
                                 : isLowStock 
@@ -726,14 +826,16 @@ export const POSPage: React.FC = () => {
                               {isOutOfStock ? 'نفد' : `${product.current_stock}`}
                             </span>
                           ) : (
-                            <span className="text-[9px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded">خدمة</span>
+                            <span className="text-[9px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded shrink-0">خدمة</span>
                           )}
                         </div>
 
+                        {/* Product Name */}
                         <h3 className="text-xs font-bold text-slate-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors">
                           {product.name}
                         </h3>
 
+                        {/* Category Name */}
                         {product.category && (
                           <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
                             {product.category.name}
@@ -742,7 +844,7 @@ export const POSPage: React.FC = () => {
                       </div>
 
                       {/* Bottom Pricing */}
-                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
+                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between w-full">
                         <span className="text-sm font-extrabold text-indigo-700 font-mono">
                           {formatCurrency(product.selling_price)}
                         </span>
