@@ -553,7 +553,7 @@ export const POSPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden bg-slate-100 text-slate-800">
+    <div className="flex flex-col flex-1 min-h-0 w-full overflow-hidden bg-slate-100 text-slate-800">
       
       {/* Top POS Control Bar */}
       <header className="flex flex-wrap items-center justify-between px-4 py-2.5 bg-slate-900 text-white border-b border-slate-800 shrink-0 gap-2">

@@ -973,6 +973,36 @@ export function ClientPreviewPage() {
               </span>
             </div>
 
+            {/* Products Search Filter */}
+            <div className="p-3 border-b border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+              <div className="relative max-w-md w-full">
+                <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-600 pointer-events-none" />
+                <input
+                  id="preview-products-table-search-input"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="ابحث عن اسم المنتج أو الكود..."
+                  className="w-full pr-10 pl-10 py-2 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white placeholder:text-slate-400 text-slate-900 shadow-2xs"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-md hover:bg-slate-100"
+                    title="مسح البحث"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              {searchQuery && (
+                <span className="text-xs text-slate-500 font-medium whitespace-nowrap">
+                  نتائج البحث: <strong className="text-indigo-600">{filteredProducts.length}</strong>
+                </span>
+              )}
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-semibold">
@@ -985,14 +1015,14 @@ export function ClientPreviewPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {products.length === 0 ? (
+                  {filteredProducts.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                        لا توجد منتجات مسجلة لهذا العميل حالياً.
+                        {searchQuery ? 'لا توجد منتجات مطابقة للبحث.' : 'لا توجد منتجات مسجلة لهذا العميل حالياً.'}
                       </td>
                     </tr>
                   ) : (
-                    products.map((p) => (
+                    filteredProducts.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
                         <td className="px-4 py-3 font-bold text-slate-900">{p.name}</td>
                         <td className="px-4 py-3 font-mono text-slate-600">{p.barcode || p.sku || '—'}</td>

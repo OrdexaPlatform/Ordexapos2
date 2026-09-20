@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { ClientSidebar } from './ClientSidebar';
 import { ClientHeader } from './ClientHeader';
 
@@ -9,6 +9,8 @@ interface ClientPOSLayoutProps {
 
 export function ClientPOSLayout({ children }: ClientPOSLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+  const isPos = location.pathname.startsWith('/pos');
 
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900" dir="rtl">
@@ -18,7 +20,7 @@ export function ClientPOSLayout({ children }: ClientPOSLayoutProps) {
       {/* Main Content Area */}
       <div className="lg:ms-64 flex flex-col min-h-screen min-w-0 w-full">
         <ClientHeader onOpenSidebar={() => setSidebarOpen(true)} />
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 min-w-0 w-full overflow-x-hidden">
+        <main className={`flex-1 min-w-0 w-full ${isPos ? 'p-0 overflow-hidden flex flex-col h-[calc(100vh-4rem)]' : 'p-4 sm:p-6 lg:p-8 overflow-x-hidden'}`}>
           {children || <Outlet />}
         </main>
       </div>
