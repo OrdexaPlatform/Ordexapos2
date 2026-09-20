@@ -283,9 +283,11 @@ export function ClientPreviewPage() {
       .replace(/[ىي]/g, 'ي');
   };
 
-  // Filtered Products
+  // Filtered Products (Search-Only for POS: returns empty list when query is empty)
   const filteredProducts = useMemo(() => {
     const cleanQuery = searchQuery.trim();
+    if (!cleanQuery) return [];
+
     const rawQ = cleanQuery.toLowerCase();
     const normQ = normalizeArabic(cleanQuery);
     const noSpaceQ = normQ.replace(/\s+/g, '');
@@ -297,18 +299,15 @@ export function ClientPreviewPage() {
       const pBarcode = (p.barcode || '').toLowerCase();
       const pSku = (p.sku || '').toLowerCase();
 
-      const matchesSearch = !cleanQuery || 
+      return (
         pName.includes(rawQ) || 
         pNameNorm.includes(normQ) || 
         pNameNoSpace.includes(noSpaceQ) ||
         pBarcode.includes(rawQ) || 
-        pSku.includes(rawQ);
-      
-      const matchesCategory = selectedCategory === 'all' || p.category_id === selectedCategory;
-
-      return matchesSearch && matchesCategory;
+        pSku.includes(rawQ)
+      );
     });
-  }, [products, searchQuery, selectedCategory]);
+  }, [products, searchQuery]);
 
   // Cart Handlers (In-Memory Safe Simulation)
   const addToCart = (product: Product) => {
@@ -635,83 +634,61 @@ export function ClientPreviewPage() {
                     </button>
                   )}
                 </div>
-
-                {/* Categories Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedCategory('all')}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-colors shrink-0 ${
-                      selectedCategory === 'all'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    جميع الأصناف ({products.length})
-                  </button>
-                  {categories.map((cat) => (
-                    <button
-                      key={cat.id}
-                      type="button"
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`px-3 py-1.5 rounded-lg font-medium transition-colors shrink-0 ${
-                        selectedCategory === cat.id
-                          ? 'bg-indigo-600 text-white font-bold'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {cat.name}
-                    </button>
-                  ))}
-                </div>
               </div>
 
-              {/* Products Grid */}
-              {filteredProducts.length === 0 ? (
-                <div className="bg-white rounded-xl p-12 text-center border border-slate-200 space-y-3">
-                  <Boxes className="h-10 w-10 text-slate-300 mx-auto" />
-                  <h4 className="text-sm font-bold text-slate-700">لا توجد أصناف مطابقة</h4>
-                  <p className="text-xs text-slate-500">
-                    {products.length === 0
-                      ? 'لم يتم إضافة أصناف لهذا العميل حتى الآن في قاعدة البيانات.'
-                      : 'جرب البحث بكلمة أخرى أو اختر تصنيفاً آخر.'}
+              {/* Products Results Area (Search-Only) */}
+              {!searchQuery.trim() ? (
+                <div className="bg-white rounded-xl p-12 text-center border border-slate-200 space-y-3 min-h-[300px] flex flex-col items-center justify-center">
+                  <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-500 mb-2">
+                    <Search className="h-7 w-7" />
+                  </div>
+                  <h4 className="text-base font-bold text-slate-800">ابحث عن منتج بالاسم أو الكود</h4>
+                  <p className="text-xs text-slate-500 max-w-sm">
+                    اكتب اسم المنتج أو كود SKU أو امسح الباركود لبدء البيع وإضافة المنتجات إلى السلة.
                   </p>
                 </div>
+              ) : filteredProducts.length === 0 ? (
+                <div className="bg-white rounded-xl p-12 text-center border border-slate-200 space-y-3 min-h-[300px] flex flex-col items-center justify-center">
+                  <div className="w-14 h-14 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-2">
+                    <Boxes className="h-7 w-7" />
+                  </div>
+                  <h4 className="text-base font-bold text-slate-800">لا توجد منتجات مطابقة لبحثك</h4>
+                  <p className="text-xs text-slate-500 max-w-sm">
+                    لم يتم العثور على أي صنف يطابق &quot;{searchQuery}&quot;. تأكد من صحة الاسم أو الكود.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="mt-2 text-xs font-bold text-indigo-600 hover:underline"
+                  >
+                    مسح البحث
+                  </button>
+                </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {filteredProducts.map((product) => (
                     <div
                       key={product.id}
                       onClick={() => addToCart(product)}
-                      className="bg-white rounded-xl border border-slate-200 p-3 flex flex-col justify-between hover:border-indigo-500 hover:shadow-md transition-all cursor-pointer group text-right select-none"
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 flex flex-col justify-between hover:border-indigo-500 hover:shadow-xs transition-all cursor-pointer group text-right select-none"
                     >
                       <div className="space-y-2">
-                        <div className="h-24 w-full rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center overflow-hidden">
-                          {product.image ? (
-                            <img
-                              src={product.image}
-                              alt={product.name}
-                              className="h-full w-full object-contain p-1"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <Package className="h-8 w-8 text-slate-300 group-hover:text-indigo-500 transition-colors" />
-                          )}
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900 line-clamp-2 leading-tight">
+                        <div className="flex items-start justify-between gap-2">
+                          <h4 className="text-sm font-bold text-slate-900 line-clamp-2 leading-tight group-hover:text-indigo-600 transition-colors">
                             {product.name}
                           </h4>
-                          {product.barcode && (
-                            <span className="text-[10px] font-mono text-slate-400 block mt-0.5">
-                              {product.barcode}
-                            </span>
-                          )}
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                            متاح
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 font-mono">
+                          {product.sku && <span>SKU: {product.sku}</span>}
+                          {product.barcode && <span>باركود: {product.barcode}</span>}
                         </div>
                       </div>
 
-                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
-                        <span className="text-xs font-bold text-indigo-600 font-mono">
+                      <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                        <span className="text-sm font-extrabold text-indigo-700 font-mono">
                           {formatCurrency(Number(product.selling_price || 0), client.currency)}
                         </span>
                         <span className="h-6 w-6 rounded-full bg-slate-100 group-hover:bg-indigo-600 group-hover:text-white text-slate-600 flex items-center justify-center text-xs transition-colors">

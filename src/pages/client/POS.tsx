@@ -323,41 +323,38 @@ export const POSPage: React.FC = () => {
     });
   };
 
-  // Filtered Products (Fast in-memory, partial search, arabic normalization, SKU & Barcode)
+  // Filtered Products (Strict Search-Only: Results returned ONLY when search query is non-empty, scoped strictly to clientId)
   const filteredProducts = useMemo(() => {
-    let result = products;
-
-    if (selectedCategory !== 'all') {
-      result = result.filter(p => p.category_id === selectedCategory);
-    }
-
     const query = searchQuery.trim();
-    if (query) {
-      const rawQ = query.toLowerCase();
-      const normQ = normalizeArabic(query);
-      const noSpaceQ = normQ.replace(/\s+/g, '');
-
-      result = result.filter(p => {
-        const pName = (p.name || '').toLowerCase();
-        const pNameNorm = normalizeArabic(p.name || '');
-        const pNameNoSpace = pNameNorm.replace(/\s+/g, '');
-        const pSku = (p.sku || '').toLowerCase();
-        const pBarcode = (p.barcode || '').toLowerCase();
-        const altBarcodes = (p.barcodes || []).map(b => (b.barcode || '').toLowerCase());
-
-        // Partial Name match (raw, normalized, or without space)
-        const nameMatch = pName.includes(rawQ) || pNameNorm.includes(normQ) || pNameNoSpace.includes(noSpaceQ);
-        // Partial SKU / Product code match
-        const skuMatch = pSku.includes(rawQ);
-        // Partial Barcode match (primary or alternate barcodes)
-        const barcodeMatch = pBarcode.includes(rawQ) || altBarcodes.some(b => b.includes(rawQ));
-
-        return nameMatch || skuMatch || barcodeMatch;
-      });
+    if (!query) {
+      return []; // Strict Rule: Zero products shown when search query is empty.
     }
 
-    return result;
-  }, [products, selectedCategory, searchQuery]);
+    const rawQ = query.toLowerCase();
+    const normQ = normalizeArabic(query);
+    const noSpaceQ = normQ.replace(/\s+/g, '');
+
+    return products.filter(p => {
+      // Multi-tenant check: never leak products across clients
+      if (p.client_id && clientId && p.client_id !== clientId) return false;
+
+      const pName = (p.name || '').toLowerCase();
+      const pNameNorm = normalizeArabic(p.name || '');
+      const pNameNoSpace = pNameNorm.replace(/\s+/g, '');
+      const pSku = (p.sku || '').toLowerCase();
+      const pBarcode = (p.barcode || '').toLowerCase();
+      const altBarcodes = (p.barcodes || []).map(b => (b.barcode || '').toLowerCase());
+
+      // Partial / Full Name match (raw, normalized, or without space)
+      const nameMatch = pName.includes(rawQ) || pNameNorm.includes(normQ) || pNameNoSpace.includes(noSpaceQ);
+      // Partial / Full SKU or Product code match
+      const skuMatch = pSku.includes(rawQ);
+      // Partial / Full Barcode match (primary or alternate barcodes)
+      const barcodeMatch = pBarcode.includes(rawQ) || altBarcodes.some(b => b.includes(rawQ));
+
+      return nameMatch || skuMatch || barcodeMatch;
+    });
+  }, [products, clientId, searchQuery]);
 
   // Handle Search Input Change with Instant Barcode Scanner Auto-Detection
   const handleSearchChange = (value: string) => {
@@ -381,6 +378,7 @@ export const POSPage: React.FC = () => {
           setErrorMessage(null);
           toast.success(`تمت إضافة: ${exactBarcodeProduct.name}`, { duration: 1500 });
           setSearchQuery('');
+          searchInputRef.current?.focus();
         }
       }
     }
@@ -404,16 +402,32 @@ export const POSPage: React.FC = () => {
           setErrorMessage(null);
           toast.success(`تمت إضافة: ${exactMatch.name}`, { duration: 1500 });
           setSearchQuery('');
+          searchInputRef.current?.focus();
         }
         return;
       }
 
-      // 2. If entered value is numeric barcode-like (e.g. 5+ digits) but not found in catalog:
-      if (/^\d{5,18}$/.test(q)) {
+      // 2. If exactly one item matches the current search query, add it directly
+      if (filteredProducts.length === 1) {
+        const singleProduct = filteredProducts[0];
+        const res = addItem(singleProduct, 1);
+        if (!res.success && res.message) {
+          setErrorMessage(res.message);
+          toast.error(res.message);
+        } else {
+          setErrorMessage(null);
+          toast.success(`تمت إضافة: ${singleProduct.name}`, { duration: 1500 });
+          setSearchQuery('');
+          searchInputRef.current?.focus();
+        }
+        return;
+      }
+
+      // 3. If entered value is numeric barcode-like (e.g. 4+ digits) but not found in catalog:
+      if (/^\d{4,20}$/.test(q) && filteredProducts.length === 0) {
         setErrorMessage(`الباركود (${q}) غير مسجل في النظام`);
         toast.error(`الباركود (${q}) غير مسجل`);
       }
-      // Note: As per requirement 9, name search does not auto-add unless exact barcode/SKU match
     }
   };
 
@@ -431,6 +445,7 @@ export const POSPage: React.FC = () => {
           setErrorMessage(null);
           toast.success(`تمت إضافة: ${foundProduct.name}`, { duration: 1500 });
           setSearchQuery('');
+          searchInputRef.current?.focus();
         }
       } else {
         setErrorMessage(`الباركود (${scannedBarcode}) غير مسجل في النظام`);
@@ -722,137 +737,128 @@ export const POSPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Categories Horizontal Scroller */}
-          <div className="px-3 py-2 border-b border-slate-200 bg-white flex items-center gap-1.5 overflow-x-auto shrink-0 scrollbar-none">
-            <button
-              onClick={() => setSelectedCategory('all')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors ${
-                selectedCategory === 'all'
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              جميع التصنيفات ({products.length})
-            </button>
-            {categories.map(cat => {
-              const count = products.filter(p => p.category_id === cat.id).length;
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors ${
-                    selectedCategory === cat.id
-                      ? 'bg-indigo-600 text-white shadow-2xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {cat.name} ({count})
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Products Grid */}
-          <div className="flex-1 overflow-y-auto p-3">
+          {/* Products Search Results Area */}
+          <div className="flex-1 overflow-y-auto p-4">
             {isLoading ? (
               <div className="flex flex-col items-center justify-center h-64 text-slate-400">
                 <RefreshCw className="w-8 h-8 animate-spin mb-2 text-indigo-500" />
                 <p className="text-xs">جاري تحميل المنتجات والأسعار...</p>
               </div>
+            ) : !searchQuery.trim() ? (
+              /* Empty State: Initial POS screen with NO product catalog */
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none min-h-[350px]">
+                <div className="w-16 h-16 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-500 mb-4 shadow-2xs">
+                  <Search className="w-8 h-8" />
+                </div>
+                <h3 className="text-base font-bold text-slate-800 mb-1">
+                  ابحث عن منتج بالاسم أو الكود
+                </h3>
+                <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                  اكتب اسم الصنف، كود SKU، أو امسح الباركود عبر قارئ الباركود لإضافته فوراً.
+                </p>
+                <div className="mt-4 flex items-center gap-2 text-[11px] text-slate-400 font-medium">
+                  <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-slate-600">F2</span>
+                  <span>للبحث السريع</span>
+                  <span className="text-slate-300">•</span>
+                  <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-slate-600">Enter</span>
+                  <span>للإضافة المباشرة</span>
+                </div>
+              </div>
             ) : filteredProducts.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-slate-400">
-                <PackageX className="w-10 h-10 mb-2 stroke-1 text-slate-300" />
-                <p className="text-xs font-medium text-slate-600">لا توجد منتجات مطابقة</p>
-                {searchQuery && (
-                  <button
-                    onClick={() => {
-                      setSearchQuery('');
-                      searchInputRef.current?.focus();
-                    }}
-                    className="mt-2 text-xs text-indigo-600 hover:underline font-medium"
-                  >
-                    إلغاء البحث وعرض كل الأصناف
-                  </button>
-                )}
+              /* No matching results state */
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none min-h-[350px]">
+                <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500 mb-4 shadow-2xs">
+                  <PackageX className="w-8 h-8" />
+                </div>
+                <h3 className="text-base font-bold text-slate-800 mb-1">
+                  لا توجد منتجات مطابقة لبحثك
+                </h3>
+                <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+                  لم يتم العثور على أي منتج يطابق &quot;{searchQuery}&quot;. تأكد من صحة الاسم أو الكود وحاول مجدداً.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                  className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>مسح البحث</span>
+                </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2.5">
+              /* Search Results List */
+              <div className="space-y-2.5 max-w-4xl mx-auto">
+                <div className="text-xs font-semibold text-slate-500 mb-2">
+                  نتائج البحث عن: <span className="text-indigo-600 font-bold">&quot;{searchQuery}&quot;</span> ({filteredProducts.length} صنف)
+                </div>
                 {filteredProducts.map(product => {
                   const isOutOfStock = product.track_stock && Number(product.current_stock || 0) <= 0;
                   const isLowStock = product.track_stock && Number(product.current_stock || 0) <= Number(product.min_stock || 0) && !isOutOfStock;
-                  const productImage = product.image_url || (product as any).image;
 
                   return (
                     <button
                       key={product.id}
                       id={`pos-product-${product.id}`}
+                      type="button"
                       onClick={() => !isOutOfStock && handleAddProduct(product)}
                       disabled={isOutOfStock}
-                      className={`group relative flex flex-col justify-between p-3 rounded-xl border text-right transition-all select-none ${
+                      className={`w-full text-right p-3.5 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 select-none ${
                         isOutOfStock
                           ? 'opacity-60 bg-slate-50 border-slate-200 cursor-not-allowed'
-                          : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-sm active:scale-[0.98]'
+                          : 'bg-white border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/20 hover:shadow-2xs active:scale-[0.99] cursor-pointer'
                       }`}
                     >
-                      {/* Top Info & Image */}
-                      <div className="w-full">
-                        {/* Product Image if present */}
-                        {productImage && (
-                          <div className="w-full h-24 mb-2 overflow-hidden rounded-lg bg-slate-100 border border-slate-100 flex items-center justify-center shrink-0">
-                            <img
-                              src={productImage}
-                              alt={product.name}
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          </div>
-                        )}
-
-                        {/* SKU / Code & Stock Badge */}
-                        <div className="flex items-start justify-between gap-1 mb-1">
-                          <span className="text-[10px] font-mono text-slate-400 uppercase truncate max-w-[120px]" title={product.sku}>
-                            {product.sku}
-                          </span>
-                          {product.track_stock ? (
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
-                              isOutOfStock 
-                                ? 'bg-rose-100 text-rose-700' 
-                                : isLowStock 
-                                  ? 'bg-amber-100 text-amber-700' 
-                                  : 'bg-emerald-100 text-emerald-700'
-                            }`}>
-                              {isOutOfStock ? 'نفد' : `${product.current_stock}`}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-sm font-bold text-slate-900 truncate">
+                            {product.name}
+                          </h4>
+                          {product.category && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium">
+                              {product.category.name}
                             </span>
-                          ) : (
-                            <span className="text-[9px] text-slate-400 bg-slate-100 px-1 py-0.5 rounded shrink-0">خدمة</span>
                           )}
                         </div>
-
-                        {/* Product Name */}
-                        <h3 className="text-xs font-bold text-slate-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors">
-                          {product.name}
-                        </h3>
-
-                        {/* Category Name */}
-                        {product.category && (
-                          <span className="text-[10px] text-slate-500 mt-0.5 block truncate">
-                            {product.category.name}
-                          </span>
-                        )}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                          {product.sku && (
+                            <span className="font-mono">
+                              <span className="text-slate-400">SKU:</span> {product.sku}
+                            </span>
+                          )}
+                          {product.barcode && (
+                            <span className="font-mono">
+                              <span className="text-slate-400">الباركود:</span> {product.barcode}
+                            </span>
+                          )}
+                          {product.track_stock ? (
+                            <span className={`font-semibold ${
+                              isOutOfStock ? 'text-rose-600' : isLowStock ? 'text-amber-600' : 'text-emerald-600'
+                            }`}>
+                              {isOutOfStock ? 'نفد من المخزن' : `المخزون: ${product.current_stock}`}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-medium">خدمة / بلا مخزون</span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Bottom Pricing */}
-                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between w-full">
-                        <span className="text-sm font-extrabold text-indigo-700 font-mono">
-                          {formatCurrency(product.selling_price)}
-                        </span>
-                        {product.tax_rate > 0 && (
-                          <span className="text-[9px] text-slate-400">
-                            ضريبة {product.tax_rate}%
+                      <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                        <div className="text-left">
+                          <span className="text-base font-extrabold text-indigo-700 font-mono">
+                            {formatCurrency(product.selling_price)}
                           </span>
-                        )}
+                          {product.tax_rate > 0 && (
+                            <span className="text-[10px] text-slate-400 block font-normal">
+                              شامل ضريبة {product.tax_rate}%
+                            </span>
+                          )}
+                        </div>
+                        <div className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold shadow-2xs hover:bg-indigo-700 transition-colors">
+                          إضافة +
+                        </div>
                       </div>
                     </button>
                   );

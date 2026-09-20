@@ -69,12 +69,20 @@ export function ClientSettings() {
       setLogo(client.logo || '');
       setCurrency(client.currency || 'EGP');
       setLanguage(client.language || 'ar');
-      setReceiptHeader((client as any).receipt_header || '');
-      setReceiptFooter((client as any).receipt_footer || 'شكراً لزيارتكم • نسعد بخدمتكم دائماً');
-      setTaxNumber((client as any).tax_number || '');
-      setTaxRate((client as any).tax_rate ?? 14);
-      setPaperSize((client as any).paper_size || '80mm');
-      setDefaultWarehouseId((client as any).default_warehouse_id || '');
+
+      // Load client-specific POS and receipt preferences safely from local storage
+      try {
+        const savedConfig = localStorage.getItem(`ordexa_pos_settings_${client.id}`);
+        if (savedConfig) {
+          const parsed = JSON.parse(savedConfig);
+          if (parsed.receipt_header !== undefined) setReceiptHeader(parsed.receipt_header);
+          if (parsed.receipt_footer !== undefined) setReceiptFooter(parsed.receipt_footer);
+          if (parsed.tax_number !== undefined) setTaxNumber(parsed.tax_number);
+          if (parsed.tax_rate !== undefined) setTaxRate(parsed.tax_rate);
+          if (parsed.paper_size !== undefined) setPaperSize(parsed.paper_size);
+          if (parsed.default_warehouse_id) setDefaultWarehouseId(parsed.default_warehouse_id);
+        }
+      } catch {}
     }
   }, [client]);
 
@@ -84,7 +92,10 @@ export function ClientSettings() {
       warehouseService.fetchWarehouses(client.id)
         .then((whs) => {
           setWarehouses(whs);
-          if (!defaultWarehouseId && whs.length > 0) {
+          const defWh = whs.find(w => w.is_default);
+          if (defWh) {
+            setDefaultWarehouseId(defWh.id);
+          } else if (whs.length > 0) {
             setDefaultWarehouseId(whs[0].id);
           }
         })
@@ -105,33 +116,62 @@ export function ClientSettings() {
     }
 
     setSaving(true);
-    const updates: Partial<Client> & Record<string, any> = {
+    // Only send legitimate columns of public.clients table
+    const clientDbPayload: Partial<Client> = {
       business_name: businessName.trim(),
       customer_name: customerName.trim() || businessName.trim(),
-      owner_name: ownerName.trim(),
+      owner_name: ownerName.trim() || null,
       phone: phone.trim(),
-      email: email.trim(),
-      address: address.trim(),
-      logo: logo.trim(),
-      currency,
-      language,
+      email: email.trim() || null,
+      address: address.trim() || null,
+      logo: logo.trim() || null,
+      currency: currency || 'EGP',
+      language: language || 'ar',
+      updated_at: new Date().toISOString(),
+    };
+
+    // Save POS-specific configuration locally and in cache
+    const posPreferences = {
       tax_number: taxNumber.trim(),
       tax_rate: Number(taxRate) || 0,
       receipt_header: receiptHeader.trim(),
       receipt_footer: receiptFooter.trim(),
       paper_size: paperSize,
       default_warehouse_id: defaultWarehouseId || null,
-      updated_at: new Date().toISOString(),
     };
+    try {
+      localStorage.setItem(`ordexa_pos_settings_${client.id}`, JSON.stringify(posPreferences));
+    } catch {}
 
     try {
-      // 1. Try server API
+      // 1. If default warehouse was selected, set is_default in warehouses table
+      if (defaultWarehouseId && client.id) {
+        try {
+          await supabase
+            .from('warehouses')
+            .update({ is_default: false })
+            .eq('client_id', client.id);
+          await supabase
+            .from('warehouses')
+            .update({ is_default: true })
+            .eq('id', defaultWarehouseId)
+            .eq('client_id', client.id);
+        } catch (whErr) {
+          console.warn('Could not update default warehouse flag in warehouses table:', whErr);
+        }
+      }
+
+      // 2. Try server API with clean client payload
       let updatedClient: Client | null = null;
       try {
         const res = await fetch('/api/client/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientId: client.id, updates }),
+          body: JSON.stringify({ 
+            clientId: client.id, 
+            updates: clientDbPayload,
+            default_warehouse_id: defaultWarehouseId || null
+          }),
         });
         if (res.ok) {
           const json = await res.json();
@@ -143,11 +183,11 @@ export function ClientSettings() {
         console.warn('API update failed, falling back to direct DB update:', apiErr);
       }
 
-      // 2. Direct Supabase update fallback (for static Vercel or direct client)
+      // 3. Direct Supabase update fallback (for static hosting or direct client connection)
       if (!updatedClient) {
         const { data: dbUpdated, error: dbErr } = await supabase
           .from('clients')
-          .update(updates)
+          .update(clientDbPayload)
           .eq('id', client.id)
           .select()
           .maybeSingle();
@@ -156,8 +196,8 @@ export function ClientSettings() {
         updatedClient = dbUpdated as Client;
       }
 
-      // 3. Update offline storage & zustand store
-      const finalClient = { ...client, ...updates, ...(updatedClient || {}) };
+      // 4. Update offline storage & zustand store
+      const finalClient = { ...client, ...clientDbPayload, ...(updatedClient || {}) };
       try {
         localStorage.setItem(`ordexa_cached_client_${client.id}`, JSON.stringify(finalClient));
         if (finalClient.client_code) {

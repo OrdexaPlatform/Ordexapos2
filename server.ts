@@ -1281,6 +1281,7 @@ app.post('/api/client/update', async (req, res) => {
 
     const allowedFields = [
       'business_name',
+      'customer_name',
       'owner_name',
       'phone',
       'email',
@@ -1288,9 +1289,8 @@ app.post('/api/client/update', async (req, res) => {
       'logo',
       'currency',
       'language',
-      'receipt_header',
-      'receipt_footer',
       'business_type',
+      'status',
     ];
 
     const safeUpdates: Record<string, any> = {
@@ -1300,6 +1300,17 @@ app.post('/api/client/update', async (req, res) => {
     for (const field of allowedFields) {
       if (updates[field] !== undefined) {
         safeUpdates[field] = updates[field];
+      }
+    }
+
+    // Handle default warehouse update if provided
+    const targetWarehouseId = req.body.default_warehouse_id || updates.default_warehouse_id;
+    if (targetWarehouseId) {
+      try {
+        await supabaseAdmin.from('warehouses').update({ is_default: false }).eq('client_id', clientId);
+        await supabaseAdmin.from('warehouses').update({ is_default: true }).eq('id', targetWarehouseId).eq('client_id', clientId);
+      } catch (whErr) {
+        console.warn('Could not update default warehouse in warehouses table:', whErr);
       }
     }
 

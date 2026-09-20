@@ -60,15 +60,25 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
   const onSubmit = async (data: ClientFormData) => {
     setIsSubmitting(true);
     try {
+      const cleanClientData = {
+        customer_name: data.customer_name.trim(),
+        business_name: data.business_name.trim(),
+        business_type: data.business_type?.trim() || null,
+        owner_name: data.owner_name?.trim() || null,
+        phone: data.phone.trim(),
+        email: data.email?.trim() || null,
+        address: data.address?.trim() || null,
+        currency: data.currency,
+        language: data.language,
+        status: data.status,
+        logo: clientLogo || null,
+        updated_at: new Date().toISOString(),
+      };
+
       if (isEditing) {
         const { error } = await supabase
           .from('clients')
-          .update({
-            ...data,
-            logo: clientLogo || null,
-            // Only send empty strings as null for optional fields if strict db requires, but empty string should be fine.
-            email: data.email || null,
-          })
+          .update(cleanClientData)
           .eq('id', initialData.id);
 
         if (error) throw error;
@@ -77,17 +87,15 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           action: 'update_client',
           entityType: 'client',
           entityId: initialData.id,
-          metadata: { changes: { ...data, has_logo: !!clientLogo } },
+          metadata: { changes: { ...cleanClientData, has_logo: !!clientLogo } },
         });
       } else {
         const clientCode = generateClientCode();
         const { data: newClient, error } = await supabase
           .from('clients')
           .insert({
-            ...data,
+            ...cleanClientData,
             client_code: clientCode,
-            logo: clientLogo || null,
-            email: data.email || null,
           })
           .select('id')
           .single();
@@ -98,7 +106,7 @@ export function ClientForm({ initialData, onSuccess, onCancel }: ClientFormProps
           action: 'create_client',
           entityType: 'client',
           entityId: newClient?.id,
-          metadata: { client_code: clientCode, ...data, has_logo: !!clientLogo },
+          metadata: { client_code: clientCode, ...cleanClientData, has_logo: !!clientLogo },
         });
       }
       onSuccess();
