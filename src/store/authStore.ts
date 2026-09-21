@@ -2,18 +2,22 @@ import { create } from 'zustand';
 import { supabase, supabaseAnonQuery } from '../lib/supabase';
 import type { User, Session } from '@supabase/supabase-js';
 import type { ClientUser } from '../types';
+import type { OfflineCredentialRecord } from '../lib/offline/offlineStorage';
 
 export type UserType = 'super_admin' | 'client_user' | null;
+export type AuthMode = 'online' | 'offline';
 
 interface AuthState {
   user: User | null;
   session: Session | null;
+  authMode: AuthMode;
   userType: UserType;
   isSuperAdmin: boolean;
   clientUser: ClientUser | null;
   loading: boolean;
   initialized: boolean;
   initialize: () => Promise<void>;
+  loginOffline: (record: OfflineCredentialRecord) => void;
   signOut: () => Promise<void>;
   determineUserRole: (user: User, session: Session) => Promise<void>;
   checkAdminRole: (user: User, session: Session) => Promise<void>;
@@ -25,6 +29,7 @@ let authListenerAttached = false;
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
+  authMode: 'online',
   userType: null,
   isSuperAdmin: false,
   clientUser: null,
@@ -38,29 +43,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     isInitializing = true;
 
     try {
-      // Offline fallback check first
+      // When offline, do NOT auto-login without credentials verification.
+      // Present the natural login screen so the user enters their email and password.
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        const cachedCuStr = localStorage.getItem('ordexa_cached_client_user');
-        const cachedUserStr = localStorage.getItem('ordexa_cached_auth_user');
-        const cachedType = (localStorage.getItem('ordexa_cached_user_type') as any) || 'client_user';
-        if (cachedCuStr) {
-          try {
-            const cachedCu = JSON.parse(cachedCuStr);
-            const cachedUser = cachedUserStr ? JSON.parse(cachedUserStr) : { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
-            set({
-              user: cachedUser,
-              session: null,
-              userType: cachedType,
-              isSuperAdmin: cachedType === 'super_admin',
-              clientUser: cachedType === 'client_user' ? (cachedCu as ClientUser) : null,
-              initialized: true,
-              loading: false,
-            });
-            return;
-          } catch (e) {
-            console.warn('Failed to parse cached auth:', e);
-          }
-        }
+        set({
+          user: null,
+          session: null,
+          authMode: 'offline',
+          userType: null,
+          isSuperAdmin: false,
+          clientUser: null,
+          initialized: true,
+          loading: false,
+        });
+        return;
       }
 
       const { data: { session } } = await supabase.auth.getSession();
@@ -68,28 +64,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (session?.user) {
         await get().determineUserRole(session.user, session);
       } else {
-        // Double check cached offline user before clearing
-        const cachedCuStr = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_cached_client_user') : null;
-        if (cachedCuStr && typeof navigator !== 'undefined' && !navigator.onLine) {
-          try {
-            const cachedCu = JSON.parse(cachedCuStr);
-            const cachedUser = { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
-            set({
-              user: cachedUser as any,
-              session: null,
-              userType: 'client_user',
-              isSuperAdmin: false,
-              clientUser: cachedCu as ClientUser,
-              initialized: true,
-              loading: false,
-            });
-            return;
-          } catch {}
-        }
-
         set({ 
           user: null, 
           session: null, 
+          authMode: 'online',
           userType: null,
           isSuperAdmin: false, 
           clientUser: null,
@@ -377,15 +355,61 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return get().determineUserRole(user, session);
   },
 
+  loginOffline: (record: OfflineCredentialRecord) => {
+    const offlineUser = {
+      id: record.auth_user_id,
+      email: record.email,
+      app_metadata: {},
+      user_metadata: { name: record.name },
+      aud: 'authenticated',
+      created_at: record.created_at,
+    } as unknown as User;
+
+    const offlineClientUser: ClientUser = {
+      id: record.client_user_id,
+      client_id: record.client_id,
+      auth_user_id: record.auth_user_id,
+      name: record.name || 'الكاشير',
+      email: record.email,
+      phone: record.phone || '',
+      role: (record.role as any) || 'cashier',
+      status: 'active',
+      custom_permissions: record.permissions || [],
+      created_at: record.created_at,
+      updated_at: record.created_at,
+    };
+
+    try {
+      localStorage.setItem('ordexa_cached_client_user', JSON.stringify(offlineClientUser));
+      localStorage.setItem('ordexa_cached_auth_user', JSON.stringify(offlineUser));
+      localStorage.setItem('ordexa_cached_user_type', 'client_user');
+      localStorage.setItem('ordexa_last_client_code', record.client_code);
+    } catch {}
+
+    set({
+      user: offlineUser,
+      session: null,
+      authMode: 'offline',
+      userType: 'client_user',
+      isSuperAdmin: false,
+      clientUser: offlineClientUser,
+      initialized: true,
+      loading: false,
+    });
+  },
+
   signOut: async () => {
     try {
-      await supabase.auth.signOut();
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        await supabase.auth.signOut();
+      }
     } catch (error) {
       console.error('SignOut error:', error);
     } finally {
       set({ 
         user: null, 
         session: null, 
+        authMode: 'online',
         userType: null,
         isSuperAdmin: false, 
         clientUser: null,

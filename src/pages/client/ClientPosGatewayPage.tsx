@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
 import { useDeviceStore } from '../../store/deviceStore';
-import { loginWithCredentials } from '../../lib/authService';
+import { loginWithCredentials, persistOfflineAuthRecord } from '../../lib/authService';
 import { InstallPwaButton } from '../../components/pwa/InstallPwaButton';
 import { POSPage } from './POS';
 import { ClientPOSLayout } from '../../components/client/ClientPOSLayout';
@@ -19,7 +19,8 @@ import {
   AlertTriangle, 
   RefreshCw, 
   LogOut,
-  ArrowRight
+  ArrowRight,
+  WifiOff
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -86,28 +87,8 @@ export const ClientPosGatewayPage: React.FC = () => {
           }
         }).catch(() => {});
       }
-
-      // Check cached user
-      if (!user || !clientUser) {
-        const cachedCuStr = localStorage.getItem('ordexa_cached_client_user');
-        if (cachedCuStr) {
-          try {
-            const cachedCu = JSON.parse(cachedCuStr);
-            const cachedUser = { id: cachedCu.auth_user_id || cachedCu.id, email: cachedCu.email };
-            useAuthStore.setState({
-              user: cachedUser as any,
-              session: null,
-              userType: 'client_user',
-              isSuperAdmin: false,
-              clientUser: cachedCu,
-              initialized: true,
-              loading: false,
-            });
-          } catch {}
-        }
-      }
     }
-  }, [clientCode, client, user, clientUser]);
+  }, [clientCode, client]);
 
   // 2. Initialize device verification when authenticated with client user
   const initDeviceRef = useRef<string | null>(null);
@@ -186,44 +167,64 @@ export const ClientPosGatewayPage: React.FC = () => {
 
     setSubmitting(true);
     try {
-      const { user: authUser, session, error } = await loginWithCredentials(
+      const { user: authUser, session, error, isOffline: loginWasOffline } = await loginWithCredentials(
         email.trim(),
-        password
+        password,
+        client.id
       );
 
       if (error) throw error;
 
-      if (authUser && session) {
-        await determineUserRole(authUser, session);
-        const authState = useAuthStore.getState();
-
-        // 1. Strict Isolation: Super Admin cannot enter client POS
-        if (authState.isSuperAdmin) {
-          await signOut();
-          const err = 'حساب مسؤول النظام (Super Admin) غير مصرح له بتسجيل الدخول إلى نقاط بيع العملاء.';
-          setLocalAuthError(err);
-          toast.error(err);
+      if (authUser) {
+        if (loginWasOffline) {
+          const authState = useAuthStore.getState();
+          toast.success(`مرحباً بك ${authState.clientUser?.name || 'الكاشير'} في كاشير ${client.business_name} (وضع عدم الاتصال)`);
+          initializeDevice(client.id);
           return;
         }
 
-        // 2. Strict Isolation: Verify user belongs to THIS client
-        if (authState.clientUser) {
-          if (authState.clientUser.client_id !== client.id) {
+        if (session) {
+          await determineUserRole(authUser, session);
+          const authState = useAuthStore.getState();
+
+          // 1. Strict Isolation: Super Admin cannot enter client POS
+          if (authState.isSuperAdmin) {
             await signOut();
-            const err = `عفواً، هذا الحساب غير تابع لمنشأة (${client.business_name}).`;
+            const err = 'حساب مسؤول النظام (Super Admin) غير مصرح له بتسجيل الدخول إلى نقاط بيع العملاء.';
             setLocalAuthError(err);
             toast.error(err);
             return;
           }
 
-          toast.success(`مرحباً بك ${authState.clientUser.name} في كاشير ${client.business_name}`);
-          // Re-initialize device for this client
-          initializeDevice(client.id);
-        } else {
-          await signOut();
-          const err = 'هذا الحساب غير مفعل أو غير مرتبط بمنشأة صالحة.';
-          setLocalAuthError(err);
-          toast.error(err);
+          // 2. Strict Isolation: Verify user belongs to THIS client
+          if (authState.clientUser) {
+            if (authState.clientUser.client_id !== client.id) {
+              await signOut();
+              const err = `عفواً، هذا الحساب غير تابع لمنشأة (${client.business_name}).`;
+              setLocalAuthError(err);
+              toast.error(err);
+              return;
+            }
+
+            // Persist offline auth record with Web Crypto PBKDF2 verifier
+            persistOfflineAuthRecord(
+              password,
+              authUser,
+              authState.clientUser,
+              client,
+              useDeviceStore.getState(),
+              useClientStore.getState()
+            );
+
+            toast.success(`مرحباً بك ${authState.clientUser.name} في كاشير ${client.business_name}`);
+            // Re-initialize device for this client
+            initializeDevice(client.id);
+          } else {
+            await signOut();
+            const err = 'هذا الحساب غير مفعل أو غير مرتبط بمنشأة صالحة.';
+            setLocalAuthError(err);
+            toast.error(err);
+          }
         }
       }
     } catch (err: any) {
@@ -241,6 +242,8 @@ export const ClientPosGatewayPage: React.FC = () => {
   // Show Client POS Landing & PWA Install Gateway + Login Form
   // -------------------------------------------------------------
   if (!user || userType !== 'client_user' || !clientUser) {
+    const isOfflineMode = typeof navigator !== 'undefined' && !navigator.onLine;
+
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8 relative" dir="rtl">
         {/* Subtle grid pattern background */}
@@ -271,6 +274,13 @@ export const ClientPosGatewayPage: React.FC = () => {
               <span>•</span>
               <span className="font-mono">{client.client_code}</span>
             </div>
+
+            {isOfflineMode && (
+              <div className="mt-3 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-medium">
+                <WifiOff className="h-3.5 w-3.5 text-amber-400" />
+                <span>وضع عدم الاتصال (Offline POS) - تسجيل الدخول متاح للحسابات المحفوظة مسبقاً</span>
+              </div>
+            )}
           </div>
 
           {/* Prominent PWA Install Action Card */}

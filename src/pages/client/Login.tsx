@@ -2,8 +2,9 @@ import { useState, FormEvent } from 'react';
 import { Navigate, Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
-import { loginWithCredentials } from '../../lib/authService';
-import { Loader2, Eye, EyeOff, Store, ShieldCheck } from 'lucide-react';
+import { useDeviceStore } from '../../store/deviceStore';
+import { loginWithCredentials, persistOfflineAuthRecord } from '../../lib/authService';
+import { Loader2, Eye, EyeOff, Store, ShieldCheck, WifiOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export function ClientLogin() {
@@ -34,27 +35,48 @@ export function ClientLogin() {
 
     setLoading(true);
     try {
-      const { user: authUser, session, error } = await loginWithCredentials(
+      const { user: authUser, session, error, isOffline: loginWasOffline } = await loginWithCredentials(
         email.trim(),
-        password
+        password,
+        client?.id
       );
 
       if (error) {
         throw error;
       }
 
-      if (authUser && session) {
-        await determineUserRole(authUser, session);
-        const storeState = useAuthStore.getState();
-
-        if (storeState.isSuperAdmin) {
-          toast.success('تم تسجيل الدخول بنجاح كمسؤول نظام (Super Admin)');
-          navigate('/super-admin', { replace: true });
-        } else if (storeState.userType === 'client_user') {
-          toast.success(`مرحباً بك ${storeState.clientUser?.name || ''}`);
+      if (authUser) {
+        if (loginWasOffline) {
+          const storeState = useAuthStore.getState();
+          toast.success(`تم تسجيل الدخول بنجاح دون اتصال (أوفلاين) - مرحباً بك ${storeState.clientUser?.name || 'الكاشير'}`);
           navigate('/dashboard', { replace: true });
-        } else {
-          toast.error('هذا الحساب غير مفعل أو غير مرتبط بمنشأة صالحة.');
+          return;
+        }
+
+        if (session) {
+          await determineUserRole(authUser, session);
+          const storeState = useAuthStore.getState();
+
+          if (storeState.clientUser && client) {
+            persistOfflineAuthRecord(
+              password,
+              authUser,
+              storeState.clientUser,
+              client,
+              useDeviceStore.getState(),
+              useClientStore.getState()
+            );
+          }
+
+          if (storeState.isSuperAdmin) {
+            toast.success('تم تسجيل الدخول بنجاح كمسؤول نظام (Super Admin)');
+            navigate('/super-admin', { replace: true });
+          } else if (storeState.userType === 'client_user') {
+            toast.success(`مرحباً بك ${storeState.clientUser?.name || ''}`);
+            navigate('/dashboard', { replace: true });
+          } else {
+            toast.error('هذا الحساب غير مفعل أو غير مرتبط بمنشأة صالحة.');
+          }
         }
       }
     } catch (error: any) {
@@ -69,6 +91,8 @@ export function ClientLogin() {
       setLoading(false);
     }
   };
+
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8" dir="rtl">
@@ -88,8 +112,16 @@ export function ClientLogin() {
           </div>
         </div>
         <h2 className="mt-5 text-center text-2xl font-bold tracking-tight text-slate-900">
-          {client?.business_name ? `تسجيل الدخول - ${client.business_name}` : 'تسجيل الدخول لنقطة البيع'}
+          {client?.business_name ? `${client.business_name} - تسجيل الدخول` : 'Ordexa POS - تسجيل الدخول'}
         </h2>
+        {isOffline && (
+          <div className="mt-3 flex justify-center">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-xs font-medium">
+              <WifiOff className="h-3.5 w-3.5 text-amber-700" />
+              وضع العمل دون اتصال بالإنترنت (Offline Mode)
+            </span>
+          </div>
+        )}
         <p className="mt-2 text-center text-sm text-slate-600">
           {client?.business_name
             ? `نظام إدارة نقطة البيع للمنشأة (${client.client_code})`

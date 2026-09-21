@@ -1,4 +1,30 @@
 import { Product, Category, Customer, Warehouse, Shift } from '../../types';
+import { PasswordVerifier } from './offlineCrypto';
+
+export interface OfflineCredentialRecord {
+  id: string; // Composite key `${client_id}:${auth_user_id}`
+  auth_user_id: string;
+  client_user_id: string;
+  client_id: string;
+  client_code: string;
+  business_name?: string;
+  email: string;
+  name?: string;
+  phone?: string;
+  role: string;
+  permissions: string[];
+  device_id: string;
+  device_fingerprint: string;
+  device_authorization: string; // 'active'
+  license_id: string;
+  license_key?: string;
+  license_status: string; // 'active'
+  license_expiry: string;
+  offline_grace_expiry: string;
+  password_verifier: PasswordVerifier;
+  created_at: string;
+  last_online_login_at: string;
+}
 
 export interface OfflineSaleRecord {
   local_transaction_id: string;
@@ -102,7 +128,7 @@ export interface PendingShiftRecord {
 }
 
 const DB_NAME = 'ordexa_pos_offline_db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 export class OfflineStorageManager {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -163,6 +189,12 @@ export class OfflineStorageManager {
         }
         if (!db.objectStoreNames.contains('auth_snapshots')) {
           db.createObjectStore('auth_snapshots', { keyPath: 'client_id' });
+        }
+        if (!db.objectStoreNames.contains('offline_credentials')) {
+          const credStore = db.createObjectStore('offline_credentials', { keyPath: 'id' });
+          credStore.createIndex('email', 'email', { unique: false });
+          credStore.createIndex('client_id', 'client_id', { unique: false });
+          credStore.createIndex('client_code', 'client_code', { unique: false });
         }
       };
 
@@ -909,6 +941,124 @@ export class OfflineStorageManager {
           store.put(updated);
         }
       };
+    } catch {}
+  }
+
+  // --- Offline Authentication & Credentials (Bug #3) ---
+
+  async saveOfflineCredential(record: OfflineCredentialRecord): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('offline_credentials', 'readwrite');
+      tx.objectStore('offline_credentials').put(record);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('Could not save offline credential to IndexedDB:', e);
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const key = `ordexa_cred_${record.client_id}_${record.email.toLowerCase()}`;
+        localStorage.setItem(key, JSON.stringify(record));
+        localStorage.setItem('ordexa_last_offline_email', record.email.toLowerCase());
+
+        // Keep index of credentials
+        const indexKey = 'ordexa_offline_credentials_index';
+        const list = JSON.parse(localStorage.getItem(indexKey) || '[]');
+        if (!list.includes(key)) {
+          list.push(key);
+          localStorage.setItem(indexKey, JSON.stringify(list));
+        }
+      }
+    } catch {}
+  }
+
+  async getAllOfflineCredentials(): Promise<OfflineCredentialRecord[]> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('offline_credentials', 'readonly');
+      const store = tx.objectStore('offline_credentials');
+      const req = store.getAll();
+      const records = await new Promise<OfflineCredentialRecord[]>((resolve) => {
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+      if (records && records.length > 0) return records;
+    } catch {}
+
+    const list: OfflineCredentialRecord[] = [];
+    try {
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('ordexa_cred_')) {
+            try {
+              const item = JSON.parse(localStorage.getItem(k) || '');
+              if (item && item.email && item.password_verifier) {
+                list.push(item);
+              }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+    return list;
+  }
+
+  async getOfflineCredentialByIdentifier(
+    identifier: string,
+    clientId?: string
+  ): Promise<OfflineCredentialRecord | null> {
+    const all = await this.getAllOfflineCredentials();
+    const cleanId = (identifier || '').trim().toLowerCase();
+
+    // 1. Exact email match (scoped to client if specified)
+    let match = all.find(c => {
+      const emailMatch = c.email?.toLowerCase() === cleanId;
+      const clientMatch = !clientId || c.client_id === clientId || c.client_code?.toUpperCase() === clientId.toUpperCase();
+      return emailMatch && clientMatch;
+    });
+
+    // 2. Name / phone / username match (scoped to client if specified)
+    if (!match) {
+      match = all.find(c => {
+        const nameMatch = c.name?.trim().toLowerCase() === cleanId;
+        const phoneMatch = c.phone?.trim() === cleanId;
+        const clientMatch = !clientId || c.client_id === clientId || c.client_code?.toUpperCase() === clientId.toUpperCase();
+        return (nameMatch || phoneMatch) && clientMatch;
+      });
+    }
+
+    // 3. Fallback match across all clients
+    if (!match) {
+      match = all.find(c => c.email?.toLowerCase() === cleanId || c.name?.trim().toLowerCase() === cleanId);
+    }
+
+    return match || null;
+  }
+
+  async removeOfflineCredential(id: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('offline_credentials', 'readwrite');
+      tx.objectStore('offline_credentials').delete(id);
+    } catch {}
+    try {
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('ordexa_cred_')) {
+            try {
+              const item = JSON.parse(localStorage.getItem(k) || '');
+              if (item && item.id === id) {
+                localStorage.removeItem(k);
+              }
+            } catch {}
+          }
+        }
+      }
     } catch {}
   }
 }
