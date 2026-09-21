@@ -50,8 +50,59 @@ export interface CachedLicenseRecord {
   checksum: string;
 }
 
+export interface OfflineAuthSnapshot {
+  client_id: string;
+  client_code: string;
+  client_name: string;
+  client_user_id: string;
+  user_role: string;
+  permissions: string[];
+  device_id: string;
+  device_fingerprint: string;
+  device_authorization_status: string; // 'active'
+  license_id: string;
+  license_key: string;
+  license_status: string; // 'active'
+  license_expiry: string;
+  max_offline_hours: number;
+  created_at: string;
+  last_validated_at: string;
+  offline_grace_expiry: string;
+  checksum: string;
+}
+
+export interface OfflineCashMovementRecord {
+  local_transaction_id: string;
+  client_id: string;
+  local_shift_id: string;
+  transaction_type: 'cash_in' | 'cash_out' | 'drop_to_safe';
+  amount: number;
+  reason: string;
+  performed_by: string;
+  status: 'pending' | 'syncing' | 'failed';
+  retry_count: number;
+  created_at: string;
+  last_error?: string;
+}
+
+export interface PendingShiftRecord {
+  local_shift_id: string;
+  client_id: string;
+  warehouse_id: string;
+  register_id?: string;
+  opened_by: string;
+  opening_cash: number;
+  opening_notes?: string;
+  cashier_name?: string;
+  device_fingerprint?: string;
+  device_id?: string;
+  status: 'pending' | 'syncing' | 'failed';
+  created_at: string;
+  retry_count: number;
+}
+
 const DB_NAME = 'ordexa_pos_offline_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export class OfflineStorageManager {
   private dbPromise: Promise<IDBDatabase> | null = null;
@@ -95,6 +146,23 @@ export class OfflineStorageManager {
         }
         if (!db.objectStoreNames.contains('config')) {
           db.createObjectStore('config', { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains('pending_shifts')) {
+          const shiftStore = db.createObjectStore('pending_shifts', { keyPath: 'local_shift_id' });
+          shiftStore.createIndex('client_id', 'client_id', { unique: false });
+          shiftStore.createIndex('status', 'status', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('pending_cash_movements')) {
+          const cashStore = db.createObjectStore('pending_cash_movements', { keyPath: 'local_transaction_id' });
+          cashStore.createIndex('client_id', 'client_id', { unique: false });
+          cashStore.createIndex('local_shift_id', 'local_shift_id', { unique: false });
+          cashStore.createIndex('status', 'status', { unique: false });
+        }
+        if (!db.objectStoreNames.contains('shift_mappings')) {
+          db.createObjectStore('shift_mappings', { keyPath: 'local_shift_id' });
+        }
+        if (!db.objectStoreNames.contains('auth_snapshots')) {
+          db.createObjectStore('auth_snapshots', { keyPath: 'client_id' });
         }
       };
 
@@ -464,11 +532,11 @@ export class OfflineStorageManager {
     }
 
     // Check device fingerprint matching
-    if (cache.device_fingerprint !== currentFingerprint) {
+    if (effectiveFingerprint && cache.device_fingerprint && cache.device_fingerprint !== effectiveFingerprint) {
       const storedFp = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_device_fingerprint') : null;
-      if (storedFp && storedFp === currentFingerprint) {
+      if (storedFp && (storedFp === effectiveFingerprint || storedFp === cache.device_fingerprint)) {
         // Re-align fingerprint if valid local device
-        cache.device_fingerprint = currentFingerprint;
+        cache.device_fingerprint = effectiveFingerprint;
       } else {
         return {
           permitted: false,
@@ -532,6 +600,316 @@ export class OfflineStorageManager {
     currentFingerprint?: string
   ) {
     return this.verifyOfflineGracePeriod(clientId, currentFingerprint);
+  }
+
+  // --- Offline Authorization Snapshot (Bug #2) ---
+
+  computeAuthSnapshotChecksum(snapshot: Omit<OfflineAuthSnapshot, 'checksum'>): string {
+    const raw = [
+      snapshot.client_id,
+      snapshot.client_code,
+      snapshot.client_user_id,
+      snapshot.device_id,
+      snapshot.device_fingerprint,
+      snapshot.license_id,
+      snapshot.license_status,
+      snapshot.device_authorization_status,
+      snapshot.last_validated_at,
+      snapshot.max_offline_hours
+    ].join('::');
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const char = raw.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
+    }
+    return `ORD-AUTH-HASH-${Math.abs(hash).toString(16).toUpperCase()}-${raw.length}`;
+  }
+
+  async saveAuthSnapshot(snapshot: OfflineAuthSnapshot): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('auth_snapshots', 'readwrite');
+      tx.objectStore('auth_snapshots').put(snapshot);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('Could not save auth snapshot to IndexedDB:', e);
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`ordexa_auth_snapshot_${snapshot.client_id}`, JSON.stringify(snapshot));
+      }
+    } catch {}
+  }
+
+  async getAuthSnapshot(clientId: string): Promise<OfflineAuthSnapshot | null> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('auth_snapshots', 'readonly');
+      const store = tx.objectStore('auth_snapshots');
+      const req = store.get(clientId);
+      const res = await new Promise<OfflineAuthSnapshot | null>((resolve) => {
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      if (res) return res;
+    } catch {}
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(`ordexa_auth_snapshot_${clientId}`);
+        if (raw) return JSON.parse(raw);
+      }
+    } catch {}
+    return null;
+  }
+
+  async verifyAuthSnapshot(clientId: string, currentFingerprint?: string): Promise<{ valid: boolean; reason?: string; snapshot?: OfflineAuthSnapshot }> {
+    const snapshot = await this.getAuthSnapshot(clientId);
+    if (!snapshot) {
+      return { valid: false, reason: 'لا توجد بيانات اعتماد محفوظة محلياً لهذا العميل' };
+    }
+
+    if (snapshot.client_id !== clientId) {
+      return { valid: false, reason: 'عدم تطابق منشأة الترخيص المحفوظ' };
+    }
+
+    if (snapshot.device_authorization_status !== 'active') {
+      return { valid: false, reason: 'هذا الجهاز غير مصرح به أو تم إيقافه' };
+    }
+
+    if (snapshot.license_status !== 'active') {
+      return { valid: false, reason: 'الترخيص غير نشط' };
+    }
+
+    if (currentFingerprint && snapshot.device_fingerprint !== currentFingerprint) {
+      const localFp = typeof localStorage !== 'undefined' ? localStorage.getItem('ordexa_device_fingerprint') : null;
+      if (localFp !== currentFingerprint && snapshot.device_fingerprint !== localFp) {
+        return { valid: false, reason: 'بصمة الجهاز لا تتطابق مع سجل الترخيص المعتمد' };
+      }
+    }
+
+    const expectedChecksum = this.computeAuthSnapshotChecksum(snapshot);
+    if (snapshot.checksum && snapshot.checksum !== expectedChecksum) {
+      return { valid: false, reason: 'تم اكتشاف تلاعب في سجل الاعتماد المحلي' };
+    }
+
+    const now = Date.now();
+    const graceExpiry = new Date(snapshot.offline_grace_expiry).getTime();
+    if (now > graceExpiry) {
+      return { valid: false, reason: 'انتهت فترة السماح للعمل بدون اتصال. يلزم الاتصال بالإنترنت' };
+    }
+
+    return { valid: true, snapshot };
+  }
+
+  // --- Offline Shift Queue (Bug #1) ---
+
+  async savePendingShift(record: PendingShiftRecord): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_shifts', 'readwrite');
+      tx.objectStore('pending_shifts').put(record);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('Could not save pending shift to IndexedDB:', e);
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const key = `ordexa_pending_shifts_${record.client_id}`;
+        const existing = JSON.parse(localStorage.getItem(key) || '[]');
+        const idx = existing.findIndex((s: any) => s.local_shift_id === record.local_shift_id);
+        if (idx >= 0) existing[idx] = record;
+        else existing.push(record);
+        localStorage.setItem(key, JSON.stringify(existing));
+      }
+    } catch {}
+  }
+
+  async getPendingShifts(clientId?: string): Promise<PendingShiftRecord[]> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_shifts', 'readonly');
+      const store = tx.objectStore('pending_shifts');
+      const req = store.getAll();
+      const records = await new Promise<PendingShiftRecord[]>((resolve) => {
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+      if (clientId) {
+        return records.filter(r => r.client_id === clientId);
+      }
+      return records;
+    } catch {
+      if (clientId && typeof localStorage !== 'undefined') {
+        try {
+          return JSON.parse(localStorage.getItem(`ordexa_pending_shifts_${clientId}`) || '[]');
+        } catch {}
+      }
+      return [];
+    }
+  }
+
+  async removePendingShift(localShiftId: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_shifts', 'readwrite');
+      tx.objectStore('pending_shifts').delete(localShiftId);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch {}
+    try {
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('ordexa_pending_shifts_')) {
+            const list = JSON.parse(localStorage.getItem(key) || '[]');
+            const filtered = list.filter((s: any) => s.local_shift_id !== localShiftId);
+            localStorage.setItem(key, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // --- Local Shift to Server Shift ID Mappings ---
+
+  async saveShiftMapping(localShiftId: string, serverShiftId: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('shift_mappings', 'readwrite');
+      tx.objectStore('shift_mappings').put({ local_shift_id: localShiftId, server_shift_id: serverShiftId, created_at: new Date().toISOString() });
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch {}
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(`ordexa_shift_map_${localShiftId}`, serverShiftId);
+      }
+    } catch {}
+  }
+
+  async getShiftMapping(localShiftId: string): Promise<string | null> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('shift_mappings', 'readonly');
+      const req = tx.objectStore('shift_mappings').get(localShiftId);
+      const res = await new Promise<any>((resolve) => {
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+      if (res && res.server_shift_id) return res.server_shift_id;
+    } catch {}
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(`ordexa_shift_map_${localShiftId}`) || null;
+      }
+    } catch {}
+    return null;
+  }
+
+  // --- Offline Cash Movement Queue (Bug #1) ---
+
+  async savePendingCashMovement(record: OfflineCashMovementRecord): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_cash_movements', 'readwrite');
+      tx.objectStore('pending_cash_movements').put(record);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) {
+      console.warn('Could not save pending cash movement to IndexedDB:', e);
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const key = `ordexa_pending_cash_${record.client_id}`;
+        const list = JSON.parse(localStorage.getItem(key) || '[]');
+        const idx = list.findIndex((m: any) => m.local_transaction_id === record.local_transaction_id);
+        if (idx >= 0) list[idx] = record;
+        else list.push(record);
+        localStorage.setItem(key, JSON.stringify(list));
+      }
+    } catch {}
+  }
+
+  async getPendingCashMovements(clientId?: string): Promise<OfflineCashMovementRecord[]> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_cash_movements', 'readonly');
+      const store = tx.objectStore('pending_cash_movements');
+      const req = store.getAll();
+      const records = await new Promise<OfflineCashMovementRecord[]>((resolve) => {
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+      if (clientId) {
+        return records.filter(r => r.client_id === clientId);
+      }
+      return records;
+    } catch {
+      if (clientId && typeof localStorage !== 'undefined') {
+        try {
+          return JSON.parse(localStorage.getItem(`ordexa_pending_cash_${clientId}`) || '[]');
+        } catch {}
+      }
+      return [];
+    }
+  }
+
+  async removePendingCashMovement(localTransactionId: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_cash_movements', 'readwrite');
+      tx.objectStore('pending_cash_movements').delete(localTransactionId);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch {}
+    try {
+      if (typeof localStorage !== 'undefined') {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('ordexa_pending_cash_')) {
+            const list = JSON.parse(localStorage.getItem(key) || '[]');
+            const filtered = list.filter((m: any) => m.local_transaction_id !== localTransactionId);
+            localStorage.setItem(key, JSON.stringify(filtered));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  async updatePendingCashMovementStatus(localTransactionId: string, status: 'pending' | 'syncing' | 'failed', error?: string): Promise<void> {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction('pending_cash_movements', 'readwrite');
+      const store = tx.objectStore('pending_cash_movements');
+      const req = store.get(localTransactionId);
+      req.onsuccess = () => {
+        if (req.result) {
+          const updated = {
+            ...req.result,
+            status,
+            retry_count: (req.result.retry_count || 0) + (status === 'failed' ? 1 : 0),
+            last_error: error || req.result.last_error
+          };
+          store.put(updated);
+        }
+      };
+    } catch {}
   }
 }
 

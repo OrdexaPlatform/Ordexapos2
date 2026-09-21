@@ -32,7 +32,16 @@ export const CashMovementModal: React.FC<CashMovementModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientId || !shift?.id) return;
+    const effectiveClientId = clientId || shift?.client_id;
+    if (!effectiveClientId) {
+      toast.error('تعذر تحديد هوية المنشأة');
+      return;
+    }
+
+    if (!shift?.id) {
+      toast.error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
+      return;
+    }
 
     if (amount <= 0) {
       toast.error('مبلغ الحركة النقدية يجب أن يكون أكبر من الصفر');
@@ -45,19 +54,28 @@ export const CashMovementModal: React.FC<CashMovementModalProps> = ({
     }
 
     try {
-      await recordCashMovement({
-        client_id: clientId,
+      const res = await recordCashMovement({
+        client_id: effectiveClientId,
         shift_id: shift.id,
         transaction_type: type,
         amount,
         reason: reason.trim(),
+        performed_by: clientUser?.id,
       });
 
-      toast.success(
-        type === 'cash_in'
-          ? 'تم تسجيل إيداع النقدية بنجاح وتحديث رصيد الوردية'
-          : 'تم تسجيل سحب النقدية بنجاح وتحديث رصيد الوردية'
-      );
+      if (res?.is_offline) {
+        toast.success(
+          type === 'cash_in'
+            ? 'تم تسجيل إيداع النقدية محلياً (بدون إنترنت). ستتم المزامنة تلقائياً.'
+            : 'تم تسجيل سحب النقدية محلياً (بدون إنترنت). ستتم المزامنة تلقائياً.'
+        );
+      } else {
+        toast.success(
+          type === 'cash_in'
+            ? 'تم تسجيل إيداع النقدية بنجاح وتحديث رصيد الوردية'
+            : 'تم تسجيل سحب النقدية بنجاح وتحديث رصيد الوردية'
+        );
+      }
       setAmount(0);
       setReason('');
       onClose();

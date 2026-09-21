@@ -21,7 +21,7 @@ interface ShiftState {
   loadActiveShift: (clientId?: string) => Promise<void>;
   openShift: (payload: OpenShiftPayload) => Promise<void>;
   closeShift: (payload: CloseShiftPayload) => Promise<any>;
-  recordCashMovement: (payload: CashDrawerMovementPayload) => Promise<void>;
+  recordCashMovement: (payload: CashDrawerMovementPayload) => Promise<{ success: boolean; movement_id: string; is_offline?: boolean }>;
   resetShiftState: () => void;
 }
 
@@ -78,10 +78,11 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   recordCashMovement: async (payload: CashDrawerMovementPayload) => {
     set({ isLoading: true, error: null });
     try {
-      await shiftService.recordCashDrawerMovement(payload);
+      const result = await shiftService.recordCashDrawerMovement(payload);
       // Refresh active shift summary
       await get().loadActiveShift(payload.client_id);
       set({ isCashMovementModalOpen: false, isLoading: false });
+      return result;
     } catch (err: any) {
       set({ error: err.message, isLoading: false });
       throw err;

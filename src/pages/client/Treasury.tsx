@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { 
   Vault, 
   ArrowUpRight, 
@@ -6,7 +7,8 @@ import {
   Banknote, 
   Calendar, 
   CheckCircle2, 
-  AlertCircle, 
+  AlertCircle,
+  AlertTriangle,
   DollarSign, 
   Plus, 
   RefreshCw, 
@@ -19,13 +21,14 @@ import { useClientStore } from '../../store/clientStore';
 import { useShiftStore } from '../../store/shiftStore';
 import { useCurrency } from '../../hooks/useCurrency';
 import { supabase } from '../../lib/supabase';
+import { offlineStorage } from '../../lib/offline/offlineStorage';
 import toast from 'react-hot-toast';
 
 interface DrawerTransaction {
   id: string;
   client_id: string;
   shift_id?: string;
-  transaction_type: 'cash_in' | 'cash_out' | 'opening_balance' | 'closing_balance';
+  transaction_type: 'cash_in' | 'cash_out' | 'opening_balance' | 'closing_balance' | 'drop_to_safe';
   amount: number;
   reason?: string;
   performed_by?: string;
@@ -34,7 +37,7 @@ interface DrawerTransaction {
 
 export function TreasuryPage() {
   const { client } = useClientStore();
-  const { activeShift: currentShift, openShift } = useShiftStore();
+  const { activeShift: currentShift, loadActiveShift, recordCashMovement } = useShiftStore();
   const { formatPrice } = useCurrency();
 
   const [transactions, setTransactions] = useState<DrawerTransaction[]>([]);
@@ -49,6 +52,7 @@ export function TreasuryPage() {
 
   useEffect(() => {
     if (client?.id) {
+      loadActiveShift(client.id);
       loadTransactions();
     }
   }, [client?.id, currentShift?.id]);
@@ -56,6 +60,7 @@ export function TreasuryPage() {
   const loadTransactions = async () => {
     if (!client?.id) return;
     setLoading(true);
+    let list: DrawerTransaction[] = [];
     try {
       const { data, error } = await supabase
         .from('cash_drawer_transactions')
@@ -65,18 +70,55 @@ export function TreasuryPage() {
         .limit(50);
 
       if (!error && data) {
-        setTransactions(data as DrawerTransaction[]);
+        list = data as DrawerTransaction[];
       }
     } catch (e) {
-      console.warn('Error loading cash drawer transactions:', e);
+      console.warn('Error loading cash drawer transactions from server:', e);
+    }
+
+    // Merge offline pending cash movements
+    try {
+      const pending = await offlineStorage.getPendingCashMovements(client.id);
+      if (pending && pending.length > 0) {
+        const pendingMapped: DrawerTransaction[] = pending.map((p) => ({
+          id: p.local_transaction_id,
+          client_id: p.client_id,
+          shift_id: p.local_shift_id,
+          transaction_type: p.transaction_type,
+          amount: p.amount,
+          reason: `${p.reason} (معلق دون اتصال)`,
+          created_at: p.created_at,
+        }));
+        const existingIds = new Set(list.map((t) => t.id));
+        const toAdd = pendingMapped.filter((p) => !existingIds.has(p.id));
+        list = [...toAdd, ...list];
+      }
+    } catch (e) {
+      console.warn('Error loading local cash movements:', e);
     } finally {
+      setTransactions(list);
       setLoading(false);
     }
+  };
+
+  const handleOpenMovementModal = (type: 'cash_in' | 'cash_out') => {
+    if (!currentShift || currentShift.status !== 'open' || !currentShift.id) {
+      toast.error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
+      return;
+    }
+    setTxType(type);
+    setIsModalOpen(true);
   };
 
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!client?.id) return;
+
+    if (!currentShift || currentShift.status !== 'open' || !currentShift.id) {
+      toast.error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
+      return;
+    }
+
     const numAmount = Number(amount);
     if (!numAmount || numAmount <= 0) {
       toast.error('يرجى إدخال مبلغ صحيح أكبر من صفر');
@@ -89,21 +131,19 @@ export function TreasuryPage() {
 
     setSubmitting(true);
     try {
-      const { error } = await supabase.from('cash_drawer_transactions').insert({
+      await recordCashMovement({
         client_id: client.id,
-        shift_id: currentShift?.id || null,
+        shift_id: currentShift.id,
         transaction_type: txType,
         amount: numAmount,
         reason: reason.trim(),
       });
 
-      if (error) throw error;
-
       toast.success(txType === 'cash_in' ? 'تم إيداع المبلغ بالدرج بنجاح' : 'تم تسجيل سحب المبلغ من الدرج بنجاح');
       setIsModalOpen(false);
       setAmount('');
       setReason('');
-      loadTransactions();
+      await loadTransactions();
     } catch (err: any) {
       toast.error(err.message || 'فشل تسجيل حركة النقدية');
     } finally {
@@ -149,28 +189,45 @@ export function TreasuryPage() {
           </button>
 
           <button
-            onClick={() => {
-              setTxType('cash_in');
-              setIsModalOpen(true);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all"
+            onClick={() => handleOpenMovementModal('cash_in')}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all cursor-pointer"
           >
             <ArrowDownLeft className="h-4 w-4" />
             <span>إيداع نقدية بالدرج</span>
           </button>
 
           <button
-            onClick={() => {
-              setTxType('cash_out');
-              setIsModalOpen(true);
-            }}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all"
+            onClick={() => handleOpenMovementModal('cash_out')}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs hover:shadow transition-all cursor-pointer"
           >
             <ArrowUpRight className="h-4 w-4" />
             <span>سحب نقدية من الدرج</span>
           </button>
         </div>
       </div>
+
+      {/* No active shift warning banner */}
+      {(!currentShift || currentShift.status !== 'open' || !currentShift.id) && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-amber-900 shadow-xs">
+          <div className="flex items-start sm:items-center gap-3">
+            <div className="p-2 bg-amber-100 rounded-xl text-amber-700 shrink-0">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-amber-950">لا توجد وردية مفتوحة حالياً للكاشير</h3>
+              <p className="text-xs text-amber-700 mt-0.5 font-medium">
+                يجب فتح وردية أولاً لتتمكن من تسجيل إيداعات أو سحوبات نقدية ومطابقة رصيد الدرج.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/shifts"
+            className="inline-flex items-center justify-center px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors shrink-0"
+          >
+            فتح وردية الآن
+          </Link>
+        </div>
+      )}
 
       {/* Real-time Drawer Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">

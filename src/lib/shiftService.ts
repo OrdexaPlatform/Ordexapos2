@@ -251,6 +251,21 @@ export const shiftService = {
       };
 
       await offlineStorage.saveCurrentShift(payload.client_id, offlineShift);
+      await offlineStorage.savePendingShift({
+        local_shift_id: offlineShiftId,
+        client_id: payload.client_id,
+        warehouse_id: payload.warehouse_id,
+        register_id: payload.register_id || 'reg-offline',
+        opened_by: finalOpenedBy,
+        opening_cash: Number(payload.opening_cash || 0),
+        opening_notes: payload.opening_notes || 'وردية تم فتحها بدون اتصال بالإنترنت',
+        cashier_name: cashierName,
+        device_fingerprint: payload.device_fingerprint,
+        device_id: payload.device_id,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        retry_count: 0
+      });
       try {
         localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(offlineShift));
       } catch {}
@@ -538,22 +553,174 @@ export const shiftService = {
   },
 
   /**
-   * Record Cash In / Cash Out drawer movement
+   * Record Cash In / Cash Out drawer movement (Online & Offline resilient)
    */
-  async recordCashDrawerMovement(payload: CashDrawerMovementPayload): Promise<{ success: boolean; movement_id: string }> {
-    const { data, error } = await supabase.rpc('record_cash_drawer_movement', {
-      p_client_id: payload.client_id,
-      p_shift_id: payload.shift_id,
-      p_transaction_type: payload.transaction_type,
-      p_amount: payload.amount,
-      p_reason: payload.reason,
-    });
-
-    if (error) {
-      throw new Error(error.message || 'فشل تسجيل حركة النقدية');
+  async recordCashDrawerMovement(payload: CashDrawerMovementPayload): Promise<{ success: boolean; movement_id: string; is_offline?: boolean }> {
+    if (!payload.client_id) {
+      throw new Error('معرف المنشأة مطلوب لتسجيل حركة الخزينة');
     }
 
-    return data;
+    const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+    const localTxId = payload.local_transaction_id || `OFF-CASH-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+    // 1. If Offline: Execute Local Cash Movement Branch directly
+    if (!isOnline) {
+      return await this.recordOfflineCashMovement({
+        ...payload,
+        local_transaction_id: localTxId
+      });
+    }
+
+    // 2. If Online: Attempt server API first
+    try {
+      if (!payload.shift_id) {
+        throw new Error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
+      }
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionData?.session?.access_token) {
+        headers['Authorization'] = `Bearer ${sessionData.session.access_token}`;
+      }
+
+      const res = await fetch('/api/shifts/cash-movement', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          clientId: payload.client_id,
+          shiftId: payload.shift_id,
+          transactionType: payload.transaction_type,
+          amount: payload.amount,
+          reason: payload.reason,
+          performedBy: payload.performed_by,
+          localTransactionId: localTxId
+        })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          try {
+            const cached = await offlineStorage.getCurrentShift(payload.client_id);
+            if (cached) {
+              const numAmt = Number(payload.amount);
+              if (payload.transaction_type === 'cash_in') {
+                cached.total_cash_in = (cached.total_cash_in || 0) + numAmt;
+                cached.closing_cash_expected = (cached.closing_cash_expected || 0) + numAmt;
+              } else {
+                cached.total_cash_out = (cached.total_cash_out || 0) + numAmt;
+                cached.closing_cash_expected = Math.max(0, (cached.closing_cash_expected || 0) - numAmt);
+              }
+              await offlineStorage.saveCurrentShift(payload.client_id, cached);
+              try { localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(cached)); } catch {}
+            }
+          } catch {}
+
+          return { success: true, movement_id: json.movement_id };
+        } else if (json.error) {
+          throw new Error(json.error);
+        }
+      }
+
+      if (!res.ok) {
+        let errJson: any = null;
+        try { errJson = await res.json(); } catch {}
+        if (errJson?.error) {
+          throw new Error(errJson.error);
+        }
+      }
+    } catch (apiErr: any) {
+      if (apiErr.message && (
+        apiErr.message.includes('يجب فتح وردية') ||
+        apiErr.message.includes('لا يمكن تسجيل') ||
+        apiErr.message.includes('غير صالح') ||
+        apiErr.message.includes('المبلغ') ||
+        apiErr.message.includes('غير موجودة')
+      )) {
+        throw apiErr;
+      }
+
+      console.warn('API error or network disconnected during cash movement, saving offline:', apiErr);
+      return await this.recordOfflineCashMovement({
+        ...payload,
+        local_transaction_id: localTxId
+      });
+    }
+
+    // Fallback to Supabase RPC
+    try {
+      const { data, error } = await supabase.rpc('record_cash_drawer_movement', {
+        p_client_id: payload.client_id,
+        p_shift_id: payload.shift_id,
+        p_transaction_type: payload.transaction_type,
+        p_amount: payload.amount,
+        p_reason: payload.reason,
+      });
+
+      if (error) throw new Error(error.message || 'فشل تسجيل حركة النقدية');
+      return data;
+    } catch (rpcErr: any) {
+      if (rpcErr.message && (
+        rpcErr.message.includes('يجب فتح وردية') ||
+        rpcErr.message.includes('لا يمكن تسجيل')
+      )) {
+        throw rpcErr;
+      }
+
+      return await this.recordOfflineCashMovement({
+        ...payload,
+        local_transaction_id: localTxId
+      });
+    }
+  },
+
+  /**
+   * Helper: Record Cash Movement Offline (stores in IndexedDB queue & updates local shift)
+   */
+  async recordOfflineCashMovement(payload: CashDrawerMovementPayload): Promise<{ success: boolean; movement_id: string; is_offline: boolean }> {
+    const localShift = await offlineStorage.getCurrentShift(payload.client_id);
+    let resolvedShiftId = payload.shift_id || localShift?.id;
+
+    if (!resolvedShiftId || !localShift || localShift.status !== 'open') {
+      throw new Error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
+    }
+
+    const localTxId = payload.local_transaction_id || `OFF-CASH-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    const numAmt = Number(payload.amount);
+
+    await offlineStorage.savePendingCashMovement({
+      local_transaction_id: localTxId,
+      client_id: payload.client_id,
+      local_shift_id: resolvedShiftId,
+      transaction_type: payload.transaction_type,
+      amount: numAmt,
+      reason: payload.reason,
+      performed_by: payload.performed_by || localShift.opened_by || 'offline_user',
+      status: 'pending',
+      retry_count: 0,
+      created_at: new Date().toISOString()
+    });
+
+    // Update local shift cash totals
+    if (localShift) {
+      if (payload.transaction_type === 'cash_in') {
+        localShift.total_cash_in = (localShift.total_cash_in || 0) + numAmt;
+        localShift.closing_cash_expected = (localShift.closing_cash_expected || 0) + numAmt;
+      } else {
+        localShift.total_cash_out = (localShift.total_cash_out || 0) + numAmt;
+        localShift.closing_cash_expected = Math.max(0, (localShift.closing_cash_expected || 0) - numAmt);
+      }
+      await offlineStorage.saveCurrentShift(payload.client_id, localShift);
+      try {
+        localStorage.setItem(`ordexa_active_shift_${payload.client_id}`, JSON.stringify(localShift));
+      } catch {}
+    }
+
+    return {
+      success: true,
+      movement_id: localTxId,
+      is_offline: true
+    };
   },
 
   /**

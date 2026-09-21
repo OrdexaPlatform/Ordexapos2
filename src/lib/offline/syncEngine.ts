@@ -42,9 +42,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
   updatePendingCount: async (clientId?: string) => {
     try {
-      const pending = await offlineStorage.getPendingSales(clientId);
-      set({ pendingCount: pending.length });
-      return pending.length;
+      const [pendingSales, pendingShifts, pendingCash] = await Promise.all([
+        offlineStorage.getPendingSales(clientId),
+        offlineStorage.getPendingShifts(clientId),
+        offlineStorage.getPendingCashMovements(clientId),
+      ]);
+      const total = (pendingSales?.length || 0) + (pendingShifts?.length || 0) + (pendingCash?.length || 0);
+      set({ pendingCount: total });
+      return total;
     } catch {
       return 0;
     }
@@ -81,6 +86,81 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     let failedCount = 0;
 
     try {
+      // ==========================================
+      // PHASE 1: Sync Pending Shifts (Open / Close)
+      // ==========================================
+      try {
+        const pendingShifts = await offlineStorage.getPendingShifts(clientId);
+        for (const pShift of pendingShifts) {
+          try {
+            // Check if already mapped to a server shift
+            const existingMapping = await offlineStorage.getShiftMapping(pShift.local_shift_id);
+            if (existingMapping) {
+              await offlineStorage.removePendingShift(pShift.local_shift_id);
+              continue;
+            }
+
+            let serverShiftId: string | null = null;
+            const res = await fetch('/api/shifts/open', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                client_id: pShift.client_id,
+                warehouse_id: pShift.warehouse_id,
+                register_id: pShift.register_id,
+                opening_cash: pShift.opening_cash,
+                opening_notes: `[Offline: ${pShift.local_shift_id}] ${pShift.opening_notes || ''}`,
+                opened_by: pShift.opened_by,
+              }),
+            });
+
+            const data = await res.json();
+            if (res.ok && (data.shift_id || data.shift?.id)) {
+              serverShiftId = data.shift_id || data.shift?.id;
+            } else if (data.message && data.message.includes('مفتوحة بالفعل')) {
+              // Retrieve the currently active shift on server
+              const { data: activeShifts } = await supabase
+                .from('shifts')
+                .select('id')
+                .eq('client_id', pShift.client_id)
+                .eq('status', 'open')
+                .order('opened_at', { ascending: false })
+                .limit(1);
+              if (activeShifts && activeShifts.length > 0) {
+                serverShiftId = activeShifts[0].id;
+              }
+            }
+
+            if (serverShiftId) {
+              await offlineStorage.saveShiftMapping(pShift.local_shift_id, serverShiftId);
+              await offlineStorage.removePendingShift(pShift.local_shift_id);
+
+              // Update local active shift cache if it matches the offline shift
+              const cur = await offlineStorage.getCurrentShift(pShift.client_id);
+              if (cur && cur.id === pShift.local_shift_id) {
+                cur.id = serverShiftId;
+                await offlineStorage.saveCurrentShift(pShift.client_id, cur);
+                try {
+                  localStorage.setItem(`ordexa_active_shift_${pShift.client_id}`, JSON.stringify(cur));
+                } catch {}
+              }
+              syncedCount++;
+            } else {
+              console.warn('Could not establish server shift for offline shift:', pShift.local_shift_id);
+              failedCount++;
+            }
+          } catch (shiftErr) {
+            console.error(`Error syncing shift ${pShift.local_shift_id}:`, shiftErr);
+            failedCount++;
+          }
+        }
+      } catch (err) {
+        console.warn('Error during phase 1 shift sync:', err);
+      }
+
+      // ==========================================
+      // PHASE 2: Sync Pending Sales
+      // ==========================================
       const pendingSales = await offlineStorage.getPendingSales(clientId);
 
       for (const sale of pendingSales) {
@@ -108,7 +188,16 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             continue;
           }
 
-          // 2. Transmit to server using standard atomic sale checkout
+          // 2. Resolve server shift ID if created while offline
+          let effectiveShiftId = sale.shift_id;
+          if (sale.shift_id && sale.shift_id.startsWith('OFF-SHIFT-')) {
+            const mapped = await offlineStorage.getShiftMapping(sale.shift_id);
+            if (mapped) {
+              effectiveShiftId = mapped;
+            }
+          }
+
+          // 3. Transmit to server using standard atomic sale checkout
           const result = await executeCompleteSale({
             clientId: sale.client_id,
             warehouseId: sale.warehouse_id,
@@ -127,7 +216,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             customerId: sale.customer_id,
             notes: `Synced offline sale (${sale.local_transaction_id})`,
             createdBy: sale.cashier_id,
-            shiftId: sale.shift_id,
+            shiftId: effectiveShiftId,
             deviceFingerprint: sale.device_fingerprint
           });
 
@@ -160,6 +249,52 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           );
           failedCount++;
         }
+      }
+
+      // ==========================================
+      // PHASE 3: Sync Pending Cash Drawer Movements
+      // ==========================================
+      try {
+        const pendingCash = await offlineStorage.getPendingCashMovements(clientId);
+        for (const cMove of pendingCash) {
+          try {
+            let effectiveShiftId = cMove.local_shift_id;
+            if (cMove.local_shift_id && cMove.local_shift_id.startsWith('OFF-SHIFT-')) {
+              const mapped = await offlineStorage.getShiftMapping(cMove.local_shift_id);
+              if (mapped) {
+                effectiveShiftId = mapped;
+              }
+            }
+
+            const res = await fetch('/api/shifts/cash-movement', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                clientId: cMove.client_id,
+                shiftId: effectiveShiftId,
+                transactionType: cMove.transaction_type,
+                amount: cMove.amount,
+                reason: cMove.reason,
+                performedBy: cMove.performed_by,
+                localTransactionId: cMove.local_transaction_id,
+              }),
+            });
+
+            const data = await res.json();
+            if (res.ok && data.success) {
+              await offlineStorage.removePendingCashMovement(cMove.local_transaction_id);
+              syncedCount++;
+            } else {
+              console.error(`Cash movement sync error for ${cMove.local_transaction_id}:`, data.message);
+              failedCount++;
+            }
+          } catch (cErr) {
+            console.error(`Sync error for cash movement ${cMove.local_transaction_id}:`, cErr);
+            failedCount++;
+          }
+        }
+      } catch (err) {
+        console.warn('Error during phase 3 cash movements sync:', err);
       }
 
       const remaining = await get().updatePendingCount(clientId);

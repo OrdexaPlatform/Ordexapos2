@@ -1842,6 +1842,140 @@ app.post('/api/shifts/close', async (req, res) => {
   }
 });
 
+// Atomic Cash Drawer Movement API (Deposit / Withdrawal / Drop to Safe) - Bug #1
+app.post('/api/shifts/cash-movement', async (req, res) => {
+  try {
+    const { clientId, shiftId, transactionType, amount, reason, performedBy, localTransactionId } = req.body;
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'معرف المنشأة (clientId) مطلوب' });
+    }
+    if (!shiftId) {
+      return res.status(400).json({ error: 'يجب فتح وردية أولاً لإجراء حركة على الخزينة.' });
+    }
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'المبلغ يجب أن يكون رقماً موجباً أكبر من صفر' });
+    }
+    if (!['cash_in', 'cash_out', 'drop_to_safe'].includes(transactionType)) {
+      return res.status(400).json({ error: 'نوع الحركة غير صالح (متاح: إيداع، سحب، ترحيل للخزنة)' });
+    }
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'سبب أو بيان الحركة مطلوب' });
+    }
+
+    // 1. EXACTLY-ONCE / Idempotency Check:
+    // If localTransactionId is provided, check if already recorded
+    if (localTransactionId) {
+      const { data: existingTx } = await supabaseAdmin
+        .from('cash_drawer_transactions')
+        .select('id, amount, transaction_type')
+        .eq('client_id', clientId)
+        .ilike('reason', `%${localTransactionId}%`)
+        .maybeSingle();
+
+      if (existingTx) {
+        return res.json({
+          success: true,
+          movement_id: existingTx.id,
+          already_synced: true,
+          message: 'تمت مزامنة هذه الحركة مسبقاً (Exactly-Once)'
+        });
+      }
+    }
+
+    // 2. Validate Active Shift in Database
+    // Must be a valid UUID for DB
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(shiftId)) {
+      return res.status(400).json({ error: 'معرف الوردية غير صالح. يجب أن تكون الوردية مسجلة ومزامنة في النظام أولاً' });
+    }
+
+    const { data: shift, error: shiftErr } = await supabaseAdmin
+      .from('shifts')
+      .select('id, client_id, status, shift_number, register_id, opened_by, total_cash_in, total_cash_out')
+      .eq('id', shiftId)
+      .eq('client_id', clientId)
+      .maybeSingle();
+
+    if (shiftErr || !shift) {
+      return res.status(404).json({ error: 'الوردية غير موجودة في سجلات المنشأة' });
+    }
+
+    if (shift.status !== 'open') {
+      return res.status(400).json({ error: 'لا يمكن تسجيل حركة على وردية مغلقة. يجب فتح وردية جديدة أولاً' });
+    }
+
+    // 3. Resolve Performed By (Client User ID)
+    let effectiveUserId = performedBy || shift.opened_by;
+    if (performedBy) {
+      const { data: cu } = await supabaseAdmin
+        .from('client_users')
+        .select('id')
+        .eq('client_id', clientId)
+        .or(`id.eq.${performedBy},auth_user_id.eq.${performedBy}`)
+        .maybeSingle();
+      if (cu) {
+        effectiveUserId = cu.id;
+      }
+    }
+
+    const finalReason = localTransactionId ? `${reason.trim()} [TX: ${localTransactionId}]` : reason.trim();
+    const movementId = crypto.randomUUID();
+
+    // 4. Insert into cash_drawer_transactions
+    const { error: insertErr } = await supabaseAdmin
+      .from('cash_drawer_transactions')
+      .insert({
+        id: movementId,
+        client_id: clientId,
+        shift_id: shift.id,
+        register_id: shift.register_id || undefined,
+        transaction_type: transactionType,
+        amount: numAmount,
+        reason: finalReason,
+        performed_by: effectiveUserId,
+        created_at: new Date().toISOString(),
+      });
+
+    if (insertErr) {
+      console.error('Insert cash_drawer_transaction error:', insertErr);
+      return res.status(500).json({ error: insertErr.message || 'فشل حفظ حركة الخزينة في قاعدة البيانات' });
+    }
+
+    // 5. Update shift total_cash_in / total_cash_out
+    const currentCashIn = Number(shift.total_cash_in || 0);
+    const currentCashOut = Number(shift.total_cash_out || 0);
+
+    const shiftUpdate: Record<string, any> = {
+      updated_at: new Date().toISOString()
+    };
+    if (transactionType === 'cash_in') {
+      shiftUpdate.total_cash_in = currentCashIn + numAmount;
+    } else {
+      shiftUpdate.total_cash_out = currentCashOut + numAmount;
+    }
+
+    await supabaseAdmin
+      .from('shifts')
+      .update(shiftUpdate)
+      .eq('id', shift.id)
+      .catch((e: any) => console.warn('Could not update shift totals:', e));
+
+    return res.json({
+      success: true,
+      movement_id: movementId,
+      shift_id: shift.id,
+      amount: numAmount,
+      transaction_type: transactionType,
+      message: 'تم تسجيل حركة الخزينة بنجاح'
+    });
+  } catch (err: any) {
+    console.error('Cash movement error:', err);
+    return res.status(500).json({ error: err.message || 'حدث خطأ غير متوقع أثناء تسجيل حركة الخزينة' });
+  }
+});
+
 // ==========================================
 // Atomic Sales Checkout Endpoint
 // ==========================================

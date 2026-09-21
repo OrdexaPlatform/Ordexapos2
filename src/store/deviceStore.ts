@@ -73,90 +73,15 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
   validateLicense: async (clientId?: string) => {
     const currentFp = get().fingerprint || getOrCreateLocalDeviceFingerprint();
     
-    // Check if network is available
-    if (typeof navigator !== 'undefined' && !navigator.onLine && clientId) {
-      const offlineCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
-      if (offlineCheck.permitted) {
-        const offlineResult: POSLicenseValidationResult = {
-          is_valid: true,
-          client: {
-            id: clientId,
-            business_name: 'Ordexa Client',
-            status: 'active'
-          },
-          license: {
-            id: offlineCheck.cachedLicense?.license_id || '',
-            license_key: offlineCheck.cachedLicense?.license_key || 'OFFLINE_LICENSE',
-            license_type: 'enterprise',
-            status: 'active',
-            expiry_date: '',
-            days_left: 365,
-            max_devices: 10,
-            activated_devices: 1
-          },
-          device: {
-            id: get().device?.id || '',
-            device_name: get().deviceName,
-            device_fingerprint: currentFp,
-            status: 'active',
-            is_registered: true,
-            is_active: true
-          },
-          message: `يعمل بدون إنترنت (فترة سماح: متبقي ${offlineCheck.remainingHours} ساعة)`
-        };
-        set({
-          licenseValidation: offlineResult,
-          isOfflineGraceActive: true,
-          remainingGraceHours: offlineCheck.remainingHours ?? 24
-        });
-        return offlineResult;
-      } else {
-        const failedResult: POSLicenseValidationResult = {
-          is_valid: false,
-          client: {
-            id: clientId,
-            business_name: 'Ordexa Client',
-            status: 'suspended'
-          },
-          error_code: 'OFFLINE_GRACE_EXPIRED',
-          message: offlineCheck.reason || 'انتهت صلاحية العمل بدون إنترنت'
-        };
-        set({
-          licenseValidation: failedResult,
-          isOfflineGraceActive: false,
-          remainingGraceHours: 0
-        });
-        return failedResult;
-      }
-    }
-
-    try {
-      const result = await validatePOSLicense(clientId, currentFp);
-      set({ licenseValidation: result, isOfflineGraceActive: false });
-      
-      // If valid, refresh offline cache
-      if (result.is_valid && clientId && result.license?.id) {
-        offlineStorage.cacheLicenseValidation({
-          clientId,
-          licenseId: result.license.id,
-          licenseKey: result.license.license_key || 'VALIDATED_LICENSE',
-          deviceFingerprint: currentFp,
-          status: 'active',
-          maxOfflineHours: 168
-        });
-        try {
-          localStorage.setItem(`ordexa_device_registered_${clientId}`, 'true');
-          if (result.device) {
-            localStorage.setItem(`ordexa_device_${clientId}`, JSON.stringify(result.device));
-          }
-        } catch {}
-      }
-      return result;
-    } catch (err) {
-      // Fallback to offline check if request failed
-      if (clientId) {
+    // Check if network is available or check offline license / auth snapshot first
+    if (clientId) {
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+      if (isOffline) {
+        const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
         const offlineCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
-        if (offlineCheck.permitted) {
+
+        if (authSnap.valid || offlineCheck.permitted) {
+          const remainingHours = offlineCheck.remainingHours || 168;
           const offlineResult: POSLicenseValidationResult = {
             is_valid: true,
             client: {
@@ -165,7 +90,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
               status: 'active'
             },
             license: {
-              id: offlineCheck.cachedLicense?.license_id || '',
+              id: authSnap.snapshot?.license_id || offlineCheck.cachedLicense?.license_id || '',
               license_key: offlineCheck.cachedLicense?.license_key || 'OFFLINE_LICENSE',
               license_type: 'enterprise',
               status: 'active',
@@ -175,19 +100,128 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
               activated_devices: 1
             },
             device: {
-              id: get().device?.id || '',
+              id: authSnap.snapshot?.device_id || get().device?.id || '',
               device_name: get().deviceName,
               device_fingerprint: currentFp,
               status: 'active',
               is_registered: true,
               is_active: true
             },
-            message: `يعمل بدون إنترنت (فترة سماح: متبقي ${offlineCheck.remainingHours} ساعة)`
+            message: `يعمل بدون إنترنت (فترة سماح: متبقي ${remainingHours} ساعة)`
           };
           set({
             licenseValidation: offlineResult,
             isOfflineGraceActive: true,
-            remainingGraceHours: offlineCheck.remainingHours ?? 24
+            remainingGraceHours: remainingHours
+          });
+          return offlineResult;
+        } else {
+          const failedResult: POSLicenseValidationResult = {
+            is_valid: false,
+            client: {
+              id: clientId,
+              business_name: 'Ordexa Client',
+              status: 'suspended'
+            },
+            error_code: 'OFFLINE_GRACE_EXPIRED',
+            message: authSnap.reason || offlineCheck.reason || 'انتهت صلاحية العمل بدون إنترنت'
+          };
+          set({
+            licenseValidation: failedResult,
+            isOfflineGraceActive: false,
+            remainingGraceHours: 0
+          });
+          return failedResult;
+        }
+      }
+    }
+
+    try {
+      const result = await validatePOSLicense(clientId, currentFp);
+      set({ licenseValidation: result, isOfflineGraceActive: false });
+      
+      // If valid, refresh offline cache and auth snapshot
+      if (result.is_valid && clientId && result.license?.id) {
+        offlineStorage.cacheLicenseValidation({
+          clientId,
+          licenseId: result.license.id,
+          licenseKey: result.license.license_key || 'VALIDATED_LICENSE',
+          deviceFingerprint: currentFp,
+          status: 'active',
+          maxOfflineHours: 168
+        });
+
+        const maxHours = 168;
+        const nowIso = new Date().toISOString();
+        const expiry = new Date(Date.now() + maxHours * 3600 * 1000).toISOString();
+        const snap = {
+          client_id: clientId,
+          client_code: (result.client as any)?.client_code || '',
+          client_name: result.client?.business_name || '',
+          client_user_id: '',
+          user_role: 'cashier',
+          permissions: ['pos_sales', 'pos_offline'],
+          device_id: result.device?.id || '',
+          device_fingerprint: currentFp,
+          device_authorization_status: 'active',
+          license_id: result.license.id,
+          license_key: result.license.license_key || 'VALIDATED_LICENSE',
+          license_status: 'active',
+          license_expiry: result.license.expiry_date || '',
+          max_offline_hours: maxHours,
+          created_at: nowIso,
+          last_validated_at: nowIso,
+          offline_grace_expiry: expiry,
+        };
+        const checksum = offlineStorage.computeAuthSnapshotChecksum(snap);
+        offlineStorage.saveAuthSnapshot({ ...snap, checksum }).catch(() => {});
+
+        try {
+          localStorage.setItem(`ordexa_device_registered_${clientId}`, 'true');
+          if (result.device) {
+            localStorage.setItem(`ordexa_device_${clientId}`, JSON.stringify(result.device));
+          }
+        } catch {}
+      }
+      return result;
+    } catch (err) {
+      // Fallback to offline check if network request failed (Network / DB connection error)
+      if (clientId) {
+        const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
+        const offlineCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
+        if (authSnap.valid || offlineCheck.permitted) {
+          const remainingHours = offlineCheck.remainingHours || 168;
+          const offlineResult: POSLicenseValidationResult = {
+            is_valid: true,
+            client: {
+              id: clientId,
+              business_name: 'Ordexa Client',
+              status: 'active'
+            },
+            license: {
+              id: authSnap.snapshot?.license_id || offlineCheck.cachedLicense?.license_id || '',
+              license_key: offlineCheck.cachedLicense?.license_key || 'OFFLINE_LICENSE',
+              license_type: 'enterprise',
+              status: 'active',
+              expiry_date: '',
+              days_left: 365,
+              max_devices: 10,
+              activated_devices: 1
+            },
+            device: {
+              id: authSnap.snapshot?.device_id || get().device?.id || '',
+              device_name: get().deviceName,
+              device_fingerprint: currentFp,
+              status: 'active',
+              is_registered: true,
+              is_active: true
+            },
+            message: `يعمل بدون إنترنت (فترة سماح: متبقي ${remainingHours} ساعة)`
+          };
+          set({
+            licenseValidation: offlineResult,
+            isOfflineGraceActive: true,
+            remainingGraceHours: remainingHours
           });
           return offlineResult;
         }
@@ -276,13 +310,15 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       errorMessage: null 
     });
 
-    // Offline early exit if offline with valid license/grace
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      const validation = await get().validateLicense(clientId);
-      if (validation && validation.is_valid) {
+    // Offline early exit if offline with valid license/grace/snapshot
+    if (clientId && typeof navigator !== 'undefined' && !navigator.onLine) {
+      const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
+      const graceCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
+
+      if (authSnap.valid || graceCheck.permitted) {
         let cachedDev: any = null;
         try {
-          const rawDev = clientId ? localStorage.getItem(`ordexa_device_${clientId}`) : null;
+          const rawDev = localStorage.getItem(`ordexa_device_${clientId}`);
           if (rawDev) cachedDev = JSON.parse(rawDev);
         } catch {}
 
@@ -290,8 +326,10 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           status: 'active',
           isActivated: true,
           errorMessage: null,
+          isOfflineGraceActive: true,
+          remainingGraceHours: graceCheck.remainingHours || 168,
           device: cachedDev || get().device || {
-            id: 'offline-device',
+            id: authSnap.snapshot?.device_id || 'offline-device',
             device_name: get().deviceName || 'جهاز نقطة البيع',
             device_fingerprint: currentFp,
             status: 'active',
@@ -321,15 +359,37 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       const { data, error } = await query.maybeSingle();
 
       if (error) {
-        // If offline and license validation succeeded via offline grace period or local registration
-        const isRegisteredLocally = clientId && typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
-        if ((get().isOfflineGraceActive && get().licenseValidation?.is_valid) || isRegisteredLocally) {
-          set({
-            status: 'active',
-            isActivated: true,
-            errorMessage: null
-          });
-          return;
+        // Fallback check: if network error or connection trouble, verify local auth snapshot or grace
+        if (clientId) {
+          const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
+          const graceCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
+          const isRegisteredLocally = typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
+
+          if (authSnap.valid || graceCheck.permitted || isRegisteredLocally) {
+            let cachedDev: any = null;
+            try {
+              const rawDev = localStorage.getItem(`ordexa_device_${clientId}`);
+              if (rawDev) cachedDev = JSON.parse(rawDev);
+            } catch {}
+
+            set({
+              status: 'active',
+              isActivated: true,
+              errorMessage: null,
+              isOfflineGraceActive: true,
+              remainingGraceHours: graceCheck.remainingHours || 168,
+              device: cachedDev || get().device || {
+                id: authSnap.snapshot?.device_id || 'offline-device',
+                device_name: get().deviceName || 'جهاز نقطة البيع',
+                device_fingerprint: currentFp,
+                status: 'active',
+                is_active: true,
+                is_registered: true,
+                client_id: clientId,
+              } as any
+            });
+            return;
+          }
         }
 
         console.error('Error fetching device status:', error);
@@ -343,14 +403,37 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       }
 
       if (!data) {
-        // If offline with valid grace
-        if (get().isOfflineGraceActive && get().licenseValidation?.is_valid) {
-          set({
-            status: 'active',
-            isActivated: true,
-            errorMessage: null
-          });
-          return;
+        // If offline with valid grace or auth snapshot, don't show unregistered error
+        if (clientId) {
+          const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
+          const graceCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
+          const isRegisteredLocally = typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
+
+          if (authSnap.valid || graceCheck.permitted || isRegisteredLocally) {
+            let cachedDev: any = null;
+            try {
+              const rawDev = localStorage.getItem(`ordexa_device_${clientId}`);
+              if (rawDev) cachedDev = JSON.parse(rawDev);
+            } catch {}
+
+            set({
+              status: 'active',
+              isActivated: true,
+              errorMessage: null,
+              isOfflineGraceActive: true,
+              remainingGraceHours: graceCheck.remainingHours || 168,
+              device: cachedDev || get().device || {
+                id: authSnap.snapshot?.device_id || 'offline-device',
+                device_name: get().deviceName || 'جهاز نقطة البيع',
+                device_fingerprint: currentFp,
+                status: 'active',
+                is_active: true,
+                is_registered: true,
+                client_id: clientId,
+              } as any
+            });
+            return;
+          }
         }
 
         // Check if license is active and has available device slots
@@ -443,6 +526,13 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           .eq('id', data.id)
           .then();
 
+        if (clientId) {
+          try {
+            localStorage.setItem(`ordexa_device_registered_${clientId}`, 'true');
+            localStorage.setItem(`ordexa_device_${clientId}`, JSON.stringify(data));
+          } catch {}
+        }
+
         set({
           device: data as Device,
           deviceName: data.device_name || get().deviceName,
@@ -460,14 +550,37 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
         });
       }
     } catch (err: any) {
-      // Check offline grace fallback
-      if (clientId && get().isOfflineGraceActive) {
-        set({
-          status: 'active',
-          isActivated: true,
-          errorMessage: null
-        });
-        return;
+      // Check offline grace / auth snapshot fallback
+      if (clientId) {
+        const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
+        const graceCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
+        const isRegisteredLocally = typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
+
+        if (authSnap.valid || graceCheck.permitted || isRegisteredLocally || get().isOfflineGraceActive) {
+          let cachedDev: any = null;
+          try {
+            const rawDev = localStorage.getItem(`ordexa_device_${clientId}`);
+            if (rawDev) cachedDev = JSON.parse(rawDev);
+          } catch {}
+
+          set({
+            status: 'active',
+            isActivated: true,
+            errorMessage: null,
+            isOfflineGraceActive: true,
+            remainingGraceHours: graceCheck.remainingHours || 168,
+            device: cachedDev || get().device || {
+              id: authSnap.snapshot?.device_id || 'offline-device',
+              device_name: get().deviceName || 'جهاز نقطة البيع',
+              device_fingerprint: currentFp,
+              status: 'active',
+              is_active: true,
+              is_registered: true,
+              client_id: clientId,
+            } as any
+          });
+          return;
+        }
       }
 
       console.error('Unexpected device initialization error:', err);

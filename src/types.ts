@@ -567,6 +567,8 @@ export interface CashDrawerMovementPayload {
   transaction_type: CashDrawerMovementType;
   amount: number;
   reason: string;
+  performed_by?: string;
+  local_transaction_id?: string;
 }
 
 // ==========================================
