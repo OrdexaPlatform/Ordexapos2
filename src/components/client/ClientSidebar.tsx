@@ -19,7 +19,9 @@ import {
   UserCheck, 
   Settings,
   Store,
-  X
+  X,
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 
 export interface ClientNavItem {
@@ -49,9 +51,16 @@ export const CLIENT_NAV_ITEMS: ClientNavItem[] = [
 interface ClientSidebarProps {
   isOpen?: boolean;
   onClose?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export function ClientSidebar({ isOpen = false, onClose }: ClientSidebarProps) {
+export function ClientSidebar({ 
+  isOpen = false, 
+  onClose,
+  isCollapsed = false,
+  onToggleCollapse
+}: ClientSidebarProps) {
   const location = useLocation();
   const { client } = useClientStore();
   const { canAccessModule } = usePermissions();
@@ -99,7 +108,7 @@ export function ClientSidebar({ isOpen = false, onClose }: ClientSidebarProps) {
         </div>
 
         {/* Close button on mobile */}
-        {isMobile && (
+        {isMobile ? (
           <button
             type="button"
             id="client-mobile-sidebar-close"
@@ -109,6 +118,20 @@ export function ClientSidebar({ isOpen = false, onClose }: ClientSidebarProps) {
           >
             <X className="h-5 w-5" />
           </button>
+        ) : (
+          onToggleCollapse && (
+            <button
+              type="button"
+              id="client-desktop-sidebar-toggle"
+              onClick={onToggleCollapse}
+              className="hidden lg:flex p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+              title="طي القائمة الجانبية لتوسيع الشاشة"
+              aria-label="طي القائمة الجانبية"
+            >
+              <ChevronRight className="h-5 w-5 rtl:inline ltr:hidden" />
+              <ChevronLeft className="h-5 w-5 ltr:inline rtl:hidden" />
+            </button>
+          )
         )}
       </div>
 
@@ -168,7 +191,12 @@ export function ClientSidebar({ isOpen = false, onClose }: ClientSidebarProps) {
       {/* 1. Desktop Static / Fixed Sidebar (Visible only on lg+) */}
       <aside 
         id="client-desktop-sidebar"
-        className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:start-0 lg:z-30 bg-slate-900 border-e border-slate-800 select-none"
+        className={cn(
+          "hidden lg:flex lg:flex-col lg:fixed lg:inset-y-0 lg:start-0 lg:z-30 bg-slate-900 border-e border-slate-800 select-none transition-all duration-300 ease-in-out",
+          isCollapsed 
+            ? "-translate-x-full rtl:translate-x-full opacity-0 pointer-events-none w-0" 
+            : "translate-x-0 opacity-100 w-64"
+        )}
       >
         {renderContent(false)}
       </aside>

@@ -1335,6 +1335,57 @@ app.post('/api/client/update', async (req, res) => {
 });
 
 // ==========================================
+// Client POS & Print Preferences Endpoints
+// ==========================================
+const CLIENT_SETTINGS_DIR = path.join(process.cwd(), 'data', 'client_settings');
+if (!fs.existsSync(CLIENT_SETTINGS_DIR)) {
+  fs.mkdirSync(CLIENT_SETTINGS_DIR, { recursive: true });
+}
+
+function getClientSettingsPath(clientId: string): string {
+  return path.join(CLIENT_SETTINGS_DIR, `${clientId}_pos_settings.json`);
+}
+
+app.get('/api/client/pos-settings', (req, res) => {
+  try {
+    const clientId = String(req.query.clientId || '');
+    if (!clientId) {
+      return res.status(400).json({ error: 'معرف المنشأة مطلوب' });
+    }
+
+    const filePath = getClientSettingsPath(clientId);
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return res.json({ success: true, settings: data });
+    }
+
+    return res.json({ success: true, settings: null });
+  } catch (err: any) {
+    console.error('Fetch client settings error:', err);
+    return res.status(500).json({ error: 'فشل استرجاع إعدادات المنشأة' });
+  }
+});
+
+app.post('/api/client/pos-settings', (req, res) => {
+  try {
+    const { clientId, settings } = req.body;
+    if (!clientId || !settings) {
+      return res.status(400).json({ error: 'معرف المنشأة والإعدادات مطلوبة' });
+    }
+
+    const filePath = getClientSettingsPath(clientId);
+    const existing = fs.existsSync(filePath) ? JSON.parse(fs.readFileSync(filePath, 'utf8')) : {};
+    const merged = { ...existing, ...settings, updated_at: new Date().toISOString() };
+    fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), 'utf8');
+
+    return res.json({ success: true, settings: merged, message: 'تم حفظ إعدادات المنشأة بنجاح' });
+  } catch (err: any) {
+    console.error('Save client settings error:', err);
+    return res.status(500).json({ error: 'فشل حفظ إعدادات المنشأة' });
+  }
+});
+
+// ==========================================
 // Atomic Shift Management Endpoints
 // ==========================================
 app.post('/api/shifts/open', async (req, res) => {

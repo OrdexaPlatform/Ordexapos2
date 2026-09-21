@@ -11,6 +11,7 @@ import {
 import { logActivity } from './activityLogger';
 import { getCurrencySymbol, formatCurrencyAmount } from './currency';
 import { offlineStorage, OfflineSaleRecord } from './offline/offlineStorage';
+import { getClientPOSSettings } from './clientSettingsService';
 
 export interface CompleteSaleItemInput {
   product_id: string;
@@ -349,10 +350,14 @@ async function executeFallbackCompleteSale(payload: CompleteSalePayload): Promis
       }
     }
 
+    const posSettings = getClientPOSSettings(clientId);
     const unitPrice = item.unit_price != null && item.unit_price >= 0 ? item.unit_price : Number(product.selling_price);
     const lineDiscount = Math.min(item.discount_amount || 0, item.quantity * unitPrice);
     const taxableAmount = (item.quantity * unitPrice) - lineDiscount;
-    const itemTax = Math.round(taxableAmount * (Number(product.tax_rate || 0) / 100) * 10000) / 10000;
+    const effectiveTaxRate = posSettings.enable_tax
+      ? (item.tax_rate != null ? Number(item.tax_rate) : Number(product.tax_rate || 0))
+      : 0;
+    const itemTax = Math.round(taxableAmount * (effectiveTaxRate / 100) * 10000) / 10000;
     const lineTotal = taxableAmount + itemTax;
 
     totalSubtotal += item.quantity * unitPrice;
@@ -367,7 +372,7 @@ async function executeFallbackCompleteSale(payload: CompleteSalePayload): Promis
       quantity: item.quantity,
       unit_price: unitPrice,
       discount_amount: lineDiscount,
-      tax_rate: Number(product.tax_rate || 0),
+      tax_rate: effectiveTaxRate,
       tax_amount: itemTax,
       line_total: lineTotal,
       track_stock: product.track_stock,
@@ -627,7 +632,10 @@ export async function executeOfflineCompleteSale(payload: CompleteSalePayload): 
     const productName = item.product_name || product?.name || 'صنف غير محدد';
     const sku = item.sku || product?.sku || '';
     const barcode = item.barcode || product?.barcode || '';
-    const taxRate = item.tax_rate != null ? Number(item.tax_rate) : (Number(product?.tax_rate) || 0);
+    const posSettings = getClientPOSSettings(clientId);
+    const taxRate = posSettings.enable_tax
+      ? (item.tax_rate != null ? Number(item.tax_rate) : (Number(product?.tax_rate) || 0))
+      : 0;
     const unitPrice = item.unit_price != null && item.unit_price >= 0
       ? Number(item.unit_price)
       : (product?.selling_price != null ? Number(product.selling_price) : 0);

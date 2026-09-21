@@ -8,9 +8,11 @@ import { ClientUserRole } from '../../types';
 
 interface ClientHeaderProps {
   onOpenSidebar?: () => void;
+  onToggleSidebar?: () => void;
+  isSidebarCollapsed?: boolean;
 }
 
-export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
+export function ClientHeader({ onOpenSidebar, onToggleSidebar, isSidebarCollapsed }: ClientHeaderProps) {
   const { clientUser, signOut } = useAuthStore();
   const { client } = useClientStore();
   const { isActivated, deviceName, fingerprint } = useDeviceStore();
@@ -39,20 +41,29 @@ export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 shadow-sm sm:px-6 lg:px-8">
-        {/* Mobile menu toggle + Business Name */}
-        <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 sm:px-6 lg:px-6 shadow-xs max-w-full overflow-hidden">
+        {/* Sidebar Toggle + Business Name */}
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <button
             type="button"
-            id="client-mobile-menu-btn"
-            onClick={onOpenSidebar}
-            className="p-2 -m-2 text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors lg:hidden flex items-center justify-center"
-            aria-label="فتح القائمة الجانبية"
+            id="client-sidebar-toggle-btn"
+            onClick={() => {
+              if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+                onOpenSidebar?.();
+              } else if (onToggleSidebar) {
+                onToggleSidebar();
+              } else {
+                onOpenSidebar?.();
+              }
+            }}
+            className="p-2 -m-1 text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors flex items-center justify-center shrink-0"
+            aria-label="تبديل القائمة الجانبية"
+            title={isSidebarCollapsed ? "إظهار القائمة الجانبية" : "طي القائمة الجانبية لتوسيع الشاشة"}
           >
-            <Menu className="h-6 w-6" />
+            <Menu className="h-5 w-5 sm:h-6 sm:w-6" />
           </button>
 
-          <div className="flex items-center gap-2.5 text-slate-800 font-bold text-sm sm:text-base">
+          <div className="flex items-center gap-2 text-slate-800 font-bold text-sm sm:text-base min-w-0">
             {client?.logo ? (
               <div className="h-8 w-8 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs">
                 <img
@@ -65,13 +76,12 @@ export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
             ) : (
               <Building className="h-5 w-5 text-indigo-600 shrink-0" />
             )}
-            <span className="truncate max-w-[160px] sm:max-w-xs">{client?.business_name || 'نظام إدارة نقاط البيع'}</span>
+            <span className="truncate max-w-[120px] sm:max-w-[200px] md:max-w-xs">{client?.business_name || 'نظام إدارة نقاط البيع'}</span>
           </div>
         </div>
 
-
         {/* Center/Right Status Badges & User Profile */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           {/* PWA Install Button for Offline Web POS */}
           <InstallPwaButton
             clientName={client?.business_name}
@@ -83,33 +93,33 @@ export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
           <button
             type="button"
             onClick={() => setShowDownloadModal(true)}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 transition-colors shadow-sm"
+            className="hidden lg:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200 transition-colors shadow-2xs shrink-0"
             title="تحميل برنامج سطح المكتب للكمبيوتر (اختياري)"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>نسخة الكمبيوتر</span>
+            <span className="hidden xl:inline">نسخة الكمبيوتر</span>
           </button>
 
           {/* Device Status Badge */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-800 border border-emerald-200">
+          <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
             <MonitorCheck className="h-3.5 w-3.5 text-emerald-600" />
             <span>جهاز نشط:</span>
-            <span className="font-semibold">{deviceName}</span>
+            <span className="font-semibold truncate max-w-[90px]">{deviceName}</span>
             <span className="text-[10px] font-mono text-emerald-700 bg-emerald-100/80 px-1 rounded">
-              {fingerprint.slice(0, 10)}...
+              {fingerprint.slice(0, 8)}...
             </span>
           </div>
 
           {/* Vertical divider */}
-          <div className="hidden sm:block h-5 w-px bg-slate-200" />
+          <div className="hidden sm:block h-5 w-px bg-slate-200 shrink-0" />
 
           {/* User Info & Role */}
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 font-semibold text-xs">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 font-semibold text-xs shrink-0">
               <User className="h-4 w-4" />
             </div>
             <div className="flex flex-col text-start">
-              <span className="text-xs font-bold text-slate-900 leading-tight">
+              <span className="text-xs font-bold text-slate-900 leading-tight truncate max-w-[90px] sm:max-w-[120px]">
                 {clientUser?.name || 'مستخدم نقطة البيع'}
               </span>
               <span
@@ -124,7 +134,7 @@ export function ClientHeader({ onOpenSidebar }: ClientHeaderProps) {
           <button
             type="button"
             onClick={signOut}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-red-700 hover:border-red-200 shadow-sm transition-colors"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-red-700 hover:border-red-200 shadow-2xs transition-colors shrink-0"
             title="تسجيل الخروج"
           >
             <LogOut className="h-3.5 w-3.5" />

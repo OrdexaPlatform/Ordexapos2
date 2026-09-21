@@ -8,8 +8,11 @@ interface POSCartState {
   notes: string;
   invoiceDiscount: number;
   invoiceDiscountType: 'fixed' | 'percentage';
+  taxEnabled: boolean;
+  globalTaxRate: number | null;
 
   // Actions
+  setTaxConfig: (enabled: boolean, defaultRate?: number | null) => void;
   setWarehouseId: (warehouseId: string) => void;
   setCustomerName: (name: string) => void;
   setNotes: (notes: string) => void;
@@ -53,6 +56,37 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
   notes: '',
   invoiceDiscount: 0,
   invoiceDiscountType: 'fixed',
+  taxEnabled: true,
+  globalTaxRate: null,
+
+  setTaxConfig: (enabled: boolean, defaultRate = null) => {
+    const state = get();
+    const updatedItems = state.items.map(item => {
+      const rate = enabled 
+        ? (item.product.tax_rate != null && item.product.tax_rate > 0 
+            ? Number(item.product.tax_rate) 
+            : (defaultRate != null ? Number(defaultRate) : 0))
+        : 0;
+      const { taxAmount, lineTotal } = calculateItemLine(
+        item.quantity,
+        item.unit_price,
+        item.discount_amount,
+        rate
+      );
+      return {
+        ...item,
+        tax_rate: rate,
+        tax_amount: taxAmount,
+        line_total: lineTotal
+      };
+    });
+
+    set({
+      taxEnabled: enabled,
+      globalTaxRate: defaultRate,
+      items: updatedItems
+    });
+  },
 
   setWarehouseId: (warehouseId: string) => set({ selectedWarehouseId: warehouseId }),
   setCustomerName: (name: string) => set({ customerName: name }),
@@ -68,7 +102,11 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
     const state = get();
     const existingIndex = state.items.findIndex(i => i.product.id === product.id);
     const unitPrice = Number(product.selling_price || 0);
-    const taxRate = Number(product.tax_rate || 0);
+    const taxRate = state.taxEnabled 
+      ? (product.tax_rate != null && product.tax_rate > 0 
+          ? Number(product.tax_rate) 
+          : (state.globalTaxRate != null ? Number(state.globalTaxRate) : 0))
+      : 0;
 
     if (existingIndex > -1) {
       const existing = state.items[existingIndex];
@@ -255,7 +293,9 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
   },
 
   getTotalTax: () => {
-    return get().items.reduce((sum, item) => sum + item.tax_amount, 0);
+    const state = get();
+    if (!state.taxEnabled) return 0;
+    return state.items.reduce((sum, item) => sum + item.tax_amount, 0);
   },
 
   getGrandTotal: () => {

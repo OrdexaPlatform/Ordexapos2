@@ -18,6 +18,21 @@ export interface Client {
   updated_at: string;
 }
 
+export interface ClientPOSSettings {
+  enable_tax: boolean;
+  tax_rate: number;
+  tax_number: string;
+  show_owner_name: boolean;
+  show_phone: boolean;
+  show_address: boolean;
+  show_tax_number: boolean;
+  receipt_header: string;
+  receipt_footer: string;
+  paper_size: '80mm' | '58mm' | 'a4';
+  default_warehouse_id?: string | null;
+  updated_at?: string;
+}
+
 export type LicenseType = 
   | 'trial' 
   | 'monthly' 

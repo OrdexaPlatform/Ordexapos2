@@ -13,15 +13,17 @@ import {
   DollarSign,
   Loader2
 } from 'lucide-react';
-import { Sale, Client } from '../../types';
+import { Sale, Client, ClientPOSSettings } from '../../types';
 import { formatCurrency } from '../../lib/salesService';
 import { POSPrintManager, PaperSize } from '../../lib/printing/printManager';
+import { getClientPOSSettings } from '../../lib/clientSettingsService';
 import { openCashDrawerPulse, isElectronApp } from '../../lib/electronBridge';
 import toast from 'react-hot-toast';
 
 interface InvoiceReceiptModalProps {
   sale: Sale | null;
   client?: Client | null;
+  posSettings?: ClientPOSSettings | null;
   isOpen: boolean;
   onClose: () => void;
   onNewSale?: () => void;
@@ -30,6 +32,7 @@ interface InvoiceReceiptModalProps {
 export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
   sale,
   client,
+  posSettings: propSettings,
   isOpen,
   onClose,
   onNewSale
@@ -37,6 +40,8 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
   const [paperSize, setPaperSize] = useState<PaperSize>('80mm');
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [isKickingDrawer, setIsKickingDrawer] = useState<boolean>(false);
+
+  const posSettings = propSettings || getClientPOSSettings(client?.id);
 
   if (!isOpen || !sale) return null;
 
@@ -46,7 +51,8 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
       if (isElectronApp()) {
         const res = await POSPrintManager.printSale(sale, client, {
           paperSize: paperSize,
-          silent: true
+          silent: true,
+          posSettings: posSettings
         });
         if (res.success) {
           toast.success('تم إرسال الفاتورة إلى الطابعة');
@@ -185,20 +191,34 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
                   />
                 </div>
               )}
-              <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
-                {client?.business_name || 'Ordexa POS Store'}
-              </h2>
-              {client?.customer_name && (
-                <p className="text-slate-600 mt-0.5 text-xs">{client.customer_name}</p>
+              {posSettings.show_owner_name !== false && (
+                <>
+                  <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
+                    {client?.business_name || 'Ordexa POS Store'}
+                  </h2>
+                  {(client?.owner_name || client?.customer_name) && (
+                    <p className="text-slate-600 mt-0.5 text-xs">
+                      {client.owner_name || client.customer_name}
+                    </p>
+                  )}
+                </>
               )}
-              {client?.phone && (
+              {posSettings.receipt_header && (
+                <p className="text-slate-600 text-xs mt-1">{posSettings.receipt_header}</p>
+              )}
+              {posSettings.enable_tax && posSettings.show_tax_number !== false && (posSettings.tax_number || (client as any)?.tax_number) && (
+                <p className="text-slate-500 text-[11px] mt-0.5 font-mono">
+                  الرقم الضريبي: {posSettings.tax_number || (client as any)?.tax_number}
+                </p>
+              )}
+              {posSettings.show_phone !== false && client?.phone && (
                 <p className="text-slate-500 text-[11px] mt-0.5 dir-ltr">{client.phone}</p>
               )}
-              {client?.address && (
+              {posSettings.show_address !== false && client?.address && (
                 <p className="text-slate-500 text-[11px] mt-0.5">{client.address}</p>
               )}
               <div className="inline-block mt-2 px-2.5 py-0.5 bg-slate-100 rounded-full text-[10px] font-semibold text-slate-700">
-                فاتورة ضريبية مبسطة
+                {posSettings.enable_tax && sale.tax_amount > 0 ? 'فاتورة ضريبية مبسطة' : 'فاتورة مبيعات'}
               </div>
             </div>
 
@@ -280,10 +300,12 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
                   <span className="font-mono">- {formatCurrency(sale.discount_amount)}</span>
                 </div>
               )}
-              <div className="flex justify-between text-slate-600">
-                <span>ضريبة القيمة المضافة (VAT):</span>
-                <span className="font-mono">{formatCurrency(sale.tax_amount)}</span>
-              </div>
+              {posSettings.enable_tax && sale.tax_amount > 0 && (
+                <div className="flex justify-between text-slate-600">
+                  <span>ضريبة القيمة المضافة (VAT):</span>
+                  <span className="font-mono">{formatCurrency(sale.tax_amount)}</span>
+                </div>
+              )}
               <div className="flex justify-between pt-2 border-t border-slate-300 text-sm font-extrabold text-slate-900">
                 <span>المجموع الكلي:</span>
                 <span className="font-mono text-indigo-700">{formatCurrency(sale.total_amount)}</span>
@@ -322,8 +344,8 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
               <div className="font-mono text-[10px] tracking-widest text-slate-400">
                 *{sale.invoice_number}*
               </div>
-              <p className="text-[10px] text-slate-400">
-                شكراً لزيارتكم! يرجى الاحتفاظ بالفاتورة في حال الاستبدال أو الاسترجاع.
+              <p className="text-[10px] text-slate-500 font-medium whitespace-pre-line">
+                {posSettings.receipt_footer || 'شكراً لزيارتكم! يرجى الاحتفاظ بالفاتورة في حال الاستبدال أو الاسترجاع.'}
               </p>
               <div className="text-[9px] text-slate-300">
                 Powered by Ordexa POS System

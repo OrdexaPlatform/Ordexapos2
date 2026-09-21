@@ -883,8 +883,8 @@ export const POSPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Pane: Cart, Totals & Checkout Actions (Width: ~35%) */}
-        <div className="w-full lg:w-96 xl:w-[420px] flex flex-col bg-slate-50 border-r border-slate-200 shrink-0">
+        {/* Right Pane: Cart, Totals & Checkout Actions (Responsive Width) */}
+        <div className="w-full lg:w-80 xl:w-96 2xl:w-[420px] flex flex-col bg-slate-50 border-r border-slate-200 shrink-0">
           
           {/* Cart Header */}
           <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">

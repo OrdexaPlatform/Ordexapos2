@@ -1,5 +1,6 @@
-import { Sale, Client, Shift, ShiftSummary } from '../../types';
+import { Sale, Client, Shift, ShiftSummary, ClientPOSSettings } from '../../types';
 import { formatCurrency } from '../salesService';
+import { getClientPOSSettings } from '../clientSettingsService';
 import { 
   isElectronApp, 
   printThermalReceiptNative, 
@@ -14,19 +15,31 @@ export interface PrintJobOptions {
   silent?: boolean;
   printerName?: string;
   copies?: number;
+  posSettings?: ClientPOSSettings;
 }
 
 export class POSPrintManager {
   /**
    * Generates clean, responsive HTML for thermal receipt (58mm / 80mm) or A4 format.
    */
-  static buildReceiptHtml(sale: Sale, client?: Client | null, paperSize: PaperSize = '80mm'): string {
+  static buildReceiptHtml(
+    sale: Sale, 
+    client?: Client | null, 
+    paperSize: PaperSize = '80mm',
+    customSettings?: ClientPOSSettings | null
+  ): string {
+    const posSettings = customSettings || getClientPOSSettings(client?.id);
     const is58 = paperSize === '58mm';
     const isA4 = paperSize === 'a4';
-    const storeName = client?.business_name || 'Ordexa POS Store';
-    const vatNumber = (client as any)?.tax_number ? `الرقم الضريبي: ${(client as any).tax_number}` : '';
-    const phone = client?.phone ? `الهاتف: ${client.phone}` : '';
-    const address = client?.address || '';
+    const storeName = posSettings.show_owner_name !== false ? (client?.business_name || 'Ordexa POS Store') : '';
+    const vatNumber = (posSettings.enable_tax && posSettings.show_tax_number !== false && (posSettings.tax_number || (client as any)?.tax_number))
+      ? `الرقم الضريبي: ${posSettings.tax_number || (client as any)?.tax_number}`
+      : '';
+    const phone = (posSettings.show_phone !== false && client?.phone) ? `الهاتف: ${client.phone}` : '';
+    const address = (posSettings.show_address !== false && client?.address) ? client.address : '';
+    const headerText = posSettings.receipt_header ? `<div style="font-size: 11px; color: #444; margin-bottom: 2px;">${posSettings.receipt_header}</div>` : '';
+    const footerText = posSettings.receipt_footer || 'شكراً لتسوقكم معنا! • نسعد بخدمتكم دائماً';
+    const invoiceTypeLabel = (posSettings.enable_tax && sale.tax_amount > 0) ? 'فاتورة ضريبية مبسطة' : 'فاتورة مبيعات';
     const dateFormatted = new Date(sale.created_at || Date.now()).toLocaleString('ar-SA');
 
     const widthStyle = is58 ? 'width: 58mm; max-width: 58mm;' : isA4 ? 'width: 210mm;' : 'width: 80mm; max-width: 80mm;';
@@ -75,11 +88,12 @@ export class POSPrintManager {
         <div class="container">
           <div class="text-center">
             ${client?.logo ? `<div style="margin-bottom: 6px;"><img src="${client.logo}" style="max-height: 48px; max-width: 140px; object-fit: contain;" /></div>` : ''}
-            <h2 style="margin: 0 0 4px 0; font-size: ${is58 ? '14px' : '17px'};">${storeName}</h2>
+            ${storeName ? `<h2 style="margin: 0 0 4px 0; font-size: ${is58 ? '14px' : '17px'};">${storeName}</h2>` : ''}
+            ${headerText}
             ${vatNumber ? `<div>${vatNumber}</div>` : ''}
             ${phone ? `<div>${phone}</div>` : ''}
             ${address ? `<div>${address}</div>` : ''}
-            <div class="bold" style="margin-top: 4px; font-size: 1.1em;">فاتورة ضريبية مبسطة</div>
+            <div class="bold" style="margin-top: 4px; font-size: 1.1em;">${invoiceTypeLabel}</div>
           </div>
 
           <div class="divider"></div>
@@ -140,10 +154,11 @@ export class POSPrintManager {
             <span>مجموع الخصم:</span>
             <span class="font-mono">- ${formatCurrency(sale.discount_amount)}</span>
           </div>` : ''}
+          ${(posSettings.enable_tax && sale.tax_amount > 0) ? `
           <div class="row">
             <span>ضريبة القيمة المضافة:</span>
             <span class="font-mono">${formatCurrency(sale.tax_amount)}</span>
-          </div>
+          </div>` : ''}
           <div class="row bold" style="font-size: 1.15em; border-top: 1px solid #000; padding-top: 4px; margin-top: 4px;">
             <span>المبلغ الإجمالي المطلوب:</span>
             <span class="font-mono">${formatCurrency(sale.total_amount)}</span>
@@ -173,7 +188,7 @@ export class POSPrintManager {
 
           <div class="text-center barcode-box">
             <div>* ${sale.invoice_number} *</div>
-            <div style="font-size: 9px; margin-top: 4px; color: #444;">شكراً لتسوقكم معنا!</div>
+            <div style="font-size: 9px; margin-top: 4px; color: #444;">${footerText}</div>
           </div>
         </div>
       </body>
@@ -301,7 +316,7 @@ export class POSPrintManager {
    */
   static async printSale(sale: Sale, client?: Client | null, options?: PrintJobOptions): Promise<PrintResult> {
     const paperSize = options?.paperSize || '80mm';
-    const html = this.buildReceiptHtml(sale, client, paperSize);
+    const html = this.buildReceiptHtml(sale, client, paperSize, options?.posSettings);
 
     if (isElectronApp()) {
       const printerName = options?.printerName || localStorage.getItem('ordexa_receipt_printer') || undefined;
