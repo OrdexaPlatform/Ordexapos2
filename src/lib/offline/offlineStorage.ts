@@ -63,6 +63,7 @@ export interface OfflineSaleRecord {
   status: 'pending' | 'syncing' | 'failed';
   retry_count: number;
   last_error?: string;
+  notes?: string | null;
 }
 
 export interface CachedLicenseRecord {

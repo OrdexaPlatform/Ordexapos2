@@ -205,7 +205,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
               product_id: item.product_id,
               quantity: item.quantity,
               unit_price: item.unit_price,
-              discount_amount: item.discount_amount || 0
+              discount_amount: item.discount_amount || 0,
+              product_name: item.product_name_snapshot,
+              sku: item.sku_snapshot,
+              barcode: item.barcode_snapshot,
+              tax_rate: item.tax_rate,
             })),
             payments: sale.payments.map(p => ({
               payment_method: p.payment_method as any,
@@ -217,7 +221,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
             notes: `Synced offline sale (${sale.local_transaction_id})`,
             createdBy: sale.cashier_id,
             shiftId: effectiveShiftId,
-            deviceFingerprint: sale.device_fingerprint
+            deviceFingerprint: sale.device_fingerprint,
+            isSyncing: true
           });
 
           if (result && result.success && result.sale_id) {
@@ -234,8 +239,17 @@ export const useSyncStore = create<SyncState>((set, get) => ({
               // Ignore schema column discrepancy if columns do not exist yet
             }
 
-            // Remove from offline IndexedDB queue
+            // Remove from offline IndexedDB queue and localStorage backup
             await offlineStorage.removePendingSale(sale.local_transaction_id);
+            try {
+              const lsKey = `ordexa_pending_sales_${sale.client_id}`;
+              const raw = localStorage.getItem(lsKey);
+              if (raw) {
+                const parsed: OfflineSaleRecord[] = JSON.parse(raw);
+                const updated = parsed.filter(s => s.local_transaction_id !== sale.local_transaction_id);
+                localStorage.setItem(lsKey, JSON.stringify(updated));
+              }
+            } catch {}
             syncedCount++;
           } else {
             throw new Error('Server did not return success for offline sale sync');

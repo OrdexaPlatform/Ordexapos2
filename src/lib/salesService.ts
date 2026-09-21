@@ -5,16 +5,24 @@ import {
   SalePayment, 
   PaymentMethod, 
   PaymentStatus, 
-  SaleStatus 
+  SaleStatus,
+  Product 
 } from '../types';
 import { logActivity } from './activityLogger';
 import { getCurrencySymbol, formatCurrencyAmount } from './currency';
+import { offlineStorage, OfflineSaleRecord } from './offline/offlineStorage';
 
 export interface CompleteSaleItemInput {
   product_id: string;
   quantity: number;
   unit_price?: number;
   discount_amount?: number;
+  product_name?: string;
+  sku?: string;
+  barcode?: string;
+  tax_rate?: number;
+  cost_price?: number;
+  track_stock?: boolean;
 }
 
 export interface CompleteSalePaymentInput {
@@ -34,6 +42,7 @@ export interface CompleteSalePayload {
   createdBy?: string | null;
   shiftId?: string | null;
   deviceFingerprint?: string | null;
+  isSyncing?: boolean;
 }
 
 export interface CompleteSaleResult {
@@ -49,6 +58,32 @@ export interface CompleteSaleResult {
   payment_status: PaymentStatus;
   sale_date: string;
   shift_id?: string | null;
+  is_offline?: boolean;
+}
+
+/**
+ * Utility to identify network disconnection or fetch failure
+ */
+export function isNetworkError(err: any): boolean {
+  if (!err) return false;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  const msg = String(err?.message || err?.error_description || err?.details || err || '').toLowerCase();
+  const name = String(err?.name || '').toLowerCase();
+  return (
+    name === 'typeerror' ||
+    name === 'networkerror' ||
+    name === 'aborterror' ||
+    msg.includes('failed to fetch') ||
+    msg.includes('network') ||
+    msg.includes('networkerror') ||
+    msg.includes('connection') ||
+    msg.includes('timeout') ||
+    msg.includes('offline') ||
+    msg.includes('load failed') ||
+    msg.includes('econnrefused') ||
+    msg.includes('abort') ||
+    msg.includes('cors')
+  );
 }
 
 export interface FetchSalesFilter {
@@ -112,6 +147,14 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
     throw new Error('يرجى اختيار وسيلة دفع واحدة على الأقل');
   }
 
+  // 0. If device is explicitly offline, immediately run atomic offline checkout without network delays
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (isOffline && !payload.isSyncing) {
+    return await executeOfflineCompleteSale(payload);
+  }
+
+  let networkFailed = false;
+
   // 1. First priority: Try secure atomic server endpoint
   try {
     const res = await fetch('/api/sales/complete', {
@@ -136,26 +179,18 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
         return json as CompleteSaleResult;
       }
     }
-  } catch (apiErr) {
-    // Network or server error, continue to RPC/fallback
+  } catch (apiErr: any) {
+    if (isNetworkError(apiErr)) {
+      networkFailed = true;
+    }
   }
 
   // 2. Second priority: Try calling atomic Supabase RPC
-  let { data: rpcData, error: rpcError } = await supabase.rpc('complete_sale', {
-    p_client_id: clientId,
-    p_warehouse_id: warehouseId,
-    p_items: items,
-    p_payments: payments,
-    p_discount_amount: discountAmount,
-    p_customer_id: customerId,
-    p_notes: notes,
-    p_created_by: createdBy,
-    p_device_fingerprint: payload.deviceFingerprint || null
-  });
+  let rpcData: any = null;
+  let rpcError: any = null;
 
-  // If signature mismatch occurred because server has older 8-param version, retry with 8 params
-  if (rpcError && (rpcError.message?.includes('p_device_fingerprint') || rpcError.code === '42883')) {
-    const retry = await supabase.rpc('complete_sale', {
+  try {
+    const res = await supabase.rpc('complete_sale', {
       p_client_id: clientId,
       p_warehouse_id: warehouseId,
       p_items: items,
@@ -163,10 +198,36 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
       p_discount_amount: discountAmount,
       p_customer_id: customerId,
       p_notes: notes,
-      p_created_by: createdBy
+      p_created_by: createdBy,
+      p_device_fingerprint: payload.deviceFingerprint || null
     });
-    rpcData = retry.data;
-    rpcError = retry.error;
+    rpcData = res.data;
+    rpcError = res.error;
+
+    // If signature mismatch occurred because server has older 8-param version, retry with 8 params
+    if (rpcError && (rpcError.message?.includes('p_device_fingerprint') || rpcError.code === '42883')) {
+      const retry = await supabase.rpc('complete_sale', {
+        p_client_id: clientId,
+        p_warehouse_id: warehouseId,
+        p_items: items,
+        p_payments: payments,
+        p_discount_amount: discountAmount,
+        p_customer_id: customerId,
+        p_notes: notes,
+        p_created_by: createdBy
+      });
+      rpcData = retry.data;
+      rpcError = retry.error;
+    }
+  } catch (rpcCatchErr: any) {
+    if (isNetworkError(rpcCatchErr)) {
+      networkFailed = true;
+    }
+    rpcError = rpcCatchErr;
+  }
+
+  if (rpcError && isNetworkError(rpcError)) {
+    networkFailed = true;
   }
 
   if (!rpcError && rpcData && rpcData.success) {
@@ -185,9 +246,23 @@ export async function executeCompleteSale(payload: CompleteSalePayload): Promise
     return rpcData as CompleteSaleResult;
   }
 
+  // If network failure occurred and not in background sync, fallback directly to offline execution
+  if (networkFailed && !payload.isSyncing) {
+    console.warn('Network error detected during checkout, falling back seamlessly to offline sale:', rpcError?.message);
+    return await executeOfflineCompleteSale(payload);
+  }
+
   // 3. Third priority: Direct fallback client transaction
   console.warn('Falling back to direct client transaction for checkout:', rpcError?.message);
-  return await executeFallbackCompleteSale(payload);
+  try {
+    return await executeFallbackCompleteSale(payload);
+  } catch (fallbackErr: any) {
+    if (isNetworkError(fallbackErr) && !payload.isSyncing) {
+      console.warn('Network error during fallback client transaction, executing offline checkout:', fallbackErr);
+      return await executeOfflineCompleteSale(payload);
+    }
+    throw fallbackErr;
+  }
 }
 
 /**
@@ -207,17 +282,34 @@ async function executeFallbackCompleteSale(payload: CompleteSalePayload): Promis
 
   // 1. Fetch products to verify pricing, stock, and snapshots
   const productIds = items.map(i => i.product_id);
-  const { data: productsData, error: productsError } = await supabase
-    .from('products')
-    .select('id, name, sku, barcode, selling_price, cost_price, tax_rate, track_stock, current_stock, is_active')
-    .eq('client_id', clientId)
-    .in('id', productIds);
+  let productsData: any = null;
+  let productsError: any = null;
+
+  try {
+    const res = await supabase
+      .from('products')
+      .select('id, name, sku, barcode, selling_price, cost_price, tax_rate, track_stock, current_stock, is_active')
+      .eq('client_id', clientId)
+      .in('id', productIds);
+    productsData = res.data;
+    productsError = res.error;
+  } catch (prodFetchErr: any) {
+    if (isNetworkError(prodFetchErr) && !payload.isSyncing) {
+      console.warn('Network error fetching products during checkout, falling back to offline checkout');
+      return await executeOfflineCompleteSale(payload);
+    }
+    productsError = prodFetchErr;
+  }
 
   if (productsError || !productsData) {
+    if (isNetworkError(productsError) && !payload.isSyncing) {
+      console.warn('Network error in productsError during checkout, falling back to offline checkout');
+      return await executeOfflineCompleteSale(payload);
+    }
     throw new Error('فشل جلب بيانات الأصناف: ' + (productsError?.message || ''));
   }
 
-  const productsMap = new Map(productsData.map(p => [p.id, p]));
+  const productsMap = new Map<string, any>(productsData.map((p: any) => [p.id, p]));
 
   // 2. Fetch stock balances in selected warehouse
   const { data: balancesData } = await supabase
@@ -308,30 +400,46 @@ async function executeFallbackCompleteSale(payload: CompleteSalePayload): Promis
   }
 
   // 3. Create Sale record
-  const { data: saleData, error: saleError } = await supabase
-    .from('sales')
-    .insert({
-      client_id: clientId,
-      shift_id: payload.shiftId || null,
-      invoice_number: nextInvoiceNumber,
-      sale_date: new Date().toISOString(),
-      customer_id: customerId,
-      warehouse_id: warehouseId,
-      subtotal: totalSubtotal,
-      discount_amount: totalLineDiscounts + discountAmount,
-      tax_amount: totalTax,
-      total_amount: finalTotal,
-      paid_amount: actualPaidAmount,
-      change_amount: changeAmount,
-      payment_status: paymentStatus,
-      sale_status: 'completed',
-      notes,
-      created_by: createdBy
-    })
-    .select('id, invoice_number, total_amount, sale_date')
-    .single();
+  let saleData: any = null;
+  let saleError: any = null;
+  try {
+    const res = await supabase
+      .from('sales')
+      .insert({
+        client_id: clientId,
+        shift_id: payload.shiftId || null,
+        invoice_number: nextInvoiceNumber,
+        sale_date: new Date().toISOString(),
+        customer_id: customerId,
+        warehouse_id: warehouseId,
+        subtotal: totalSubtotal,
+        discount_amount: totalLineDiscounts + discountAmount,
+        tax_amount: totalTax,
+        total_amount: finalTotal,
+        paid_amount: actualPaidAmount,
+        change_amount: changeAmount,
+        payment_status: paymentStatus,
+        sale_status: 'completed',
+        notes,
+        created_by: createdBy
+      })
+      .select('id, invoice_number, total_amount, sale_date')
+      .single();
+    saleData = res.data;
+    saleError = res.error;
+  } catch (insertCatchErr: any) {
+    if (isNetworkError(insertCatchErr) && !payload.isSyncing) {
+      console.warn('Network error creating sale during fallback sale, using offline sale:', insertCatchErr);
+      return await executeOfflineCompleteSale(payload);
+    }
+    saleError = insertCatchErr;
+  }
 
   if (saleError || !saleData) {
+    if (isNetworkError(saleError) && !payload.isSyncing) {
+      console.warn('Network error in saleError during fallback sale, using offline sale:', saleError);
+      return await executeOfflineCompleteSale(payload);
+    }
     throw new Error('فشل إنشاء فاتورة البيع: ' + (saleError?.message || ''));
   }
 
@@ -433,7 +541,276 @@ async function executeFallbackCompleteSale(payload: CompleteSalePayload): Promis
     paid_amount: actualPaidAmount,
     change_amount: changeAmount,
     payment_status: paymentStatus,
-    sale_date: saleData.sale_date
+    sale_date: saleData.sale_date,
+    shift_id: payload.shiftId || null,
+  };
+}
+
+/**
+ * Executes an offline complete sale transaction without any internet dependency.
+ * Persists sale locally into IndexedDB and LocalStorage queues, decrements local catalog stock,
+ * updates offline shift totals, and returns complete receipt data.
+ */
+export async function executeOfflineCompleteSale(payload: CompleteSalePayload): Promise<CompleteSaleResult> {
+  const {
+    clientId,
+    warehouseId,
+    items,
+    payments,
+    discountAmount = 0,
+    customerId = null,
+    notes = null,
+    createdBy = null,
+    shiftId = null,
+    deviceFingerprint = null,
+  } = payload;
+
+  if (!clientId) {
+    throw new Error('معرف المنشأة مطلوب لإتمام البيع');
+  }
+  if (!warehouseId) {
+    throw new Error('يرجى تحديد المستودع / الفرع الذي يتم البيع منه');
+  }
+  if (!items || items.length === 0) {
+    throw new Error('سلة البيع فارغة، يرجى إضافة صنف واحد على الأقل');
+  }
+  if (!payments || payments.length === 0) {
+    throw new Error('يرجى اختيار وسيلة دفع واحدة على الأقل');
+  }
+
+  // 1. Fetch cached products from IndexedDB or LocalStorage
+  let cachedProducts: Product[] = [];
+  try {
+    cachedProducts = await offlineStorage.getProducts();
+  } catch (idbErr) {
+    console.warn('Could not read products from IndexedDB:', idbErr);
+  }
+
+  if (!cachedProducts || cachedProducts.length === 0) {
+    try {
+      const raw = localStorage.getItem(`ordexa_cached_products_${clientId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) cachedProducts = parsed;
+      }
+    } catch {}
+  }
+
+  const productsMap = new Map<string, Product>();
+  if (Array.isArray(cachedProducts)) {
+    for (const p of cachedProducts) {
+      if (p && p.id) productsMap.set(p.id, p);
+    }
+  }
+
+  // 2. Validate items and compute totals
+  let totalSubtotal = 0;
+  let totalLineDiscounts = 0;
+  let totalTax = 0;
+
+  const preparedItems: Array<{
+    product_id: string;
+    product_name_snapshot: string;
+    sku_snapshot?: string;
+    barcode_snapshot?: string;
+    quantity: number;
+    unit_price: number;
+    discount_amount: number;
+    tax_rate: number;
+    tax_amount: number;
+    line_total: number;
+    track_stock?: boolean;
+  }> = [];
+
+  for (const item of items) {
+    const product = productsMap.get(item.product_id);
+    const productName = item.product_name || product?.name || 'صنف غير محدد';
+    const sku = item.sku || product?.sku || '';
+    const barcode = item.barcode || product?.barcode || '';
+    const taxRate = item.tax_rate != null ? Number(item.tax_rate) : (Number(product?.tax_rate) || 0);
+    const unitPrice = item.unit_price != null && item.unit_price >= 0
+      ? Number(item.unit_price)
+      : (product?.selling_price != null ? Number(product.selling_price) : 0);
+    const trackStock = item.track_stock != null ? Boolean(item.track_stock) : Boolean(product?.track_stock);
+
+    if (item.quantity <= 0) {
+      throw new Error(`كمية الصنف (${productName}) يجب أن تكون أكبر من الصفر`);
+    }
+
+    const lineDiscount = Math.min(item.discount_amount || 0, item.quantity * unitPrice);
+    const taxableAmount = (item.quantity * unitPrice) - lineDiscount;
+    const itemTax = Math.round(taxableAmount * (taxRate / 100) * 10000) / 10000;
+    const lineTotal = taxableAmount + itemTax;
+
+    totalSubtotal += item.quantity * unitPrice;
+    totalLineDiscounts += lineDiscount;
+    totalTax += itemTax;
+
+    preparedItems.push({
+      product_id: item.product_id,
+      product_name_snapshot: productName,
+      sku_snapshot: sku,
+      barcode_snapshot: barcode,
+      quantity: item.quantity,
+      unit_price: unitPrice,
+      discount_amount: lineDiscount,
+      tax_rate: taxRate,
+      tax_amount: itemTax,
+      line_total: lineTotal,
+      track_stock: trackStock,
+    });
+  }
+
+  const finalTotal = Math.max(0, totalSubtotal - totalLineDiscounts - discountAmount + totalTax);
+
+  // 3. Compute payments & change
+  let totalPaid = 0;
+  for (const p of payments) {
+    if (p.amount <= 0) {
+      throw new Error('مبلغ الدفع يجب أن يكون أكبر من الصفر');
+    }
+    totalPaid += Number(p.amount);
+  }
+
+  const paymentStatus: PaymentStatus = totalPaid >= finalTotal ? 'paid' : 'partial';
+  const changeAmount = totalPaid > finalTotal ? totalPaid - finalTotal : 0;
+  const actualPaidAmount = Math.min(totalPaid, finalTotal);
+
+  // 4. Generate local idempotent IDs
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const randPart = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const timePart = Date.now().toString().slice(-4);
+  const local_transaction_id = `OFF-${dateStr}-${randPart}${timePart}`;
+  const invoice_number = `INV-OFF-${dateStr.slice(2)}-${randPart}${timePart}`;
+  const saleDate = new Date().toISOString();
+
+  // 5. Build OfflineSaleRecord
+  const offlineRecord: OfflineSaleRecord = {
+    local_transaction_id,
+    client_id: clientId,
+    warehouse_id: warehouseId,
+    shift_id: shiftId || null,
+    items: preparedItems.map(item => ({
+      product_id: item.product_id,
+      product_name_snapshot: item.product_name_snapshot,
+      sku_snapshot: item.sku_snapshot,
+      barcode_snapshot: item.barcode_snapshot,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      discount_amount: item.discount_amount,
+      tax_rate: item.tax_rate,
+      tax_amount: item.tax_amount,
+      line_total: item.line_total,
+    })),
+    payments: payments.map(p => ({
+      payment_method: p.payment_method,
+      amount: p.amount,
+      reference: p.reference,
+    })),
+    subtotal: totalSubtotal,
+    discount_amount: totalLineDiscounts + discountAmount,
+    tax_amount: totalTax,
+    total_amount: finalTotal,
+    paid_amount: actualPaidAmount,
+    change_amount: changeAmount,
+    payment_method: payments[0]?.payment_method || 'cash',
+    customer_id: customerId,
+    cashier_id: createdBy,
+    device_fingerprint: deviceFingerprint,
+    created_at: saleDate,
+    status: 'pending',
+    retry_count: 0,
+    notes: notes || null,
+  };
+
+  // 6. Save in IndexedDB queue and LocalStorage fallback
+  try {
+    await offlineStorage.savePendingSale(offlineRecord);
+  } catch (queueErr) {
+    console.warn('Could not save to IndexedDB pending_sales:', queueErr);
+  }
+
+  try {
+    const lsKey = `ordexa_pending_sales_${clientId}`;
+    const rawExisting = localStorage.getItem(lsKey);
+    const existingList: OfflineSaleRecord[] = rawExisting ? JSON.parse(rawExisting) : [];
+    existingList.push(offlineRecord);
+    localStorage.setItem(lsKey, JSON.stringify(existingList));
+  } catch {}
+
+  // 7. Decrement stock in cached products for real-time offline stock awareness
+  if (cachedProducts && cachedProducts.length > 0) {
+    let stockChanged = false;
+    for (const item of preparedItems) {
+      if (item.track_stock) {
+        const prod = productsMap.get(item.product_id);
+        if (prod && typeof prod.current_stock === 'number') {
+          prod.current_stock = Math.max(0, prod.current_stock - item.quantity);
+          stockChanged = true;
+        }
+      }
+    }
+    if (stockChanged) {
+      try {
+        await offlineStorage.saveProducts(cachedProducts);
+        localStorage.setItem(`ordexa_cached_products_${clientId}`, JSON.stringify(cachedProducts));
+      } catch (err) {
+        console.warn('Could not update cached products stock offline:', err);
+      }
+    }
+  }
+
+  // 8. Update offline shift running totals if active shift is present
+  try {
+    let currentShift = await offlineStorage.getCurrentShift(clientId);
+    if (!currentShift) {
+      const rawShift = localStorage.getItem(`ordexa_active_shift_${clientId}`);
+      if (rawShift) currentShift = JSON.parse(rawShift);
+    }
+
+    if (currentShift && currentShift.status === 'open') {
+      const isCash = payments[0]?.payment_method === 'cash';
+      const isCard = payments[0]?.payment_method === 'card';
+
+      currentShift.total_sales_amount = (Number(currentShift.total_sales_amount) || 0) + finalTotal;
+      if (isCash) {
+        currentShift.total_cash_sales = (Number(currentShift.total_cash_sales) || 0) + actualPaidAmount;
+      } else if (isCard) {
+        currentShift.total_card_sales = (Number(currentShift.total_card_sales) || 0) + actualPaidAmount;
+      } else {
+        currentShift.total_other_sales = (Number(currentShift.total_other_sales) || 0) + actualPaidAmount;
+      }
+      currentShift.orders_count = (Number(currentShift.orders_count) || 0) + 1;
+      currentShift.updated_at = saleDate;
+
+      await offlineStorage.saveCurrentShift(clientId, currentShift);
+      localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(currentShift));
+    }
+  } catch (shiftErr) {
+    console.warn('Could not update offline shift running totals:', shiftErr);
+  }
+
+  // 9. Dispatch custom event so UI and sync engines know a new sale is queued
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ordexa:offline_sale_completed', {
+      detail: { clientId, transactionId: local_transaction_id }
+    }));
+  }
+
+  return {
+    success: true,
+    sale_id: local_transaction_id,
+    invoice_number,
+    subtotal: totalSubtotal,
+    discount_amount: totalLineDiscounts + discountAmount,
+    tax_amount: totalTax,
+    total_amount: finalTotal,
+    paid_amount: actualPaidAmount,
+    change_amount: changeAmount,
+    payment_status: paymentStatus,
+    sale_date: saleDate,
+    shift_id: shiftId || null,
+    is_offline: true,
   };
 }
 

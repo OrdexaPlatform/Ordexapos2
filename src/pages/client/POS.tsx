@@ -490,7 +490,13 @@ export const POSPage: React.FC = () => {
         product_id: item.product.id,
         quantity: item.quantity,
         unit_price: item.unit_price,
-        discount_amount: item.discount_amount
+        discount_amount: item.discount_amount,
+        product_name: item.product.name,
+        sku: item.product.sku,
+        barcode: item.product.barcode,
+        tax_rate: item.product.tax_rate,
+        cost_price: item.product.cost_price,
+        track_stock: item.product.track_stock
       })),
       payments: [
         {
@@ -505,6 +511,15 @@ export const POSPage: React.FC = () => {
     };
 
     const result = await executeCompleteSale(payload);
+
+    if (result.is_offline) {
+      toast.success('تم تسجيل الفاتورة أوفلاين بنجاح وحفظها في طابور المزامنة التلقائية', {
+        icon: '📡',
+        duration: 4000
+      });
+    } else {
+      toast.success('تم إصدار الفاتورة وإتمام عملية البيع بنجاح');
+    }
 
     // Build Sale object for receipt modal
     const completedSaleObj: Sale = {
