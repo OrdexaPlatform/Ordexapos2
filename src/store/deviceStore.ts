@@ -29,14 +29,60 @@ interface DeviceState {
 // Key for client hardware identifier in storage
 const DEVICE_FP_STORAGE_KEY = 'ordexa_device_fingerprint';
 
+function getHardwareSignature(): { prefix: string; os: string; hwId: string } {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return { prefix: 'SRV', os: 'GEN', hwId: '00000000' };
+  }
+
+  const ua = navigator.userAgent || '';
+  const isMobile = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const isTablet = /iPad|Tablet/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua));
+
+  let prefix = 'PC';
+  if (isMobile) {
+    prefix = 'MOB';
+  } else if (isTablet) {
+    prefix = 'TAB';
+  }
+
+  let os = 'GEN';
+  if (/Windows/i.test(ua)) os = 'WIN';
+  else if (/Android/i.test(ua)) os = 'AND';
+  else if (/iPhone|iPad|iPod|iOS/i.test(ua)) os = 'IOS';
+  else if (/Macintosh|Mac OS/i.test(ua)) os = 'MAC';
+  else if (/Linux/i.test(ua)) os = 'LNX';
+
+  // Hardware traits: screen dimensions, color depth, concurrency, touch points
+  const screenSpec = typeof screen !== 'undefined' ? `${screen.width}x${screen.height}x${screen.colorDepth}` : '0x0x0';
+  const cores = navigator.hardwareConcurrency || 1;
+  const touchPoints = navigator.maxTouchPoints || 0;
+  const rawString = `${prefix}-${os}-${screenSpec}-${cores}-${touchPoints}`;
+
+  let hash = 2166136261;
+  for (let i = 0; i < rawString.length; i++) {
+    hash ^= rawString.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hwId = (hash >>> 0).toString(16).toUpperCase().padStart(8, '0');
+
+  return { prefix, os, hwId };
+}
+
 export function getOrCreateLocalDeviceFingerprint(): string {
   try {
+    const { prefix, os, hwId } = getHardwareSignature();
+    const expectedPrefix = `${prefix}-${os}-${hwId}`;
+    
     let fp = localStorage.getItem(DEVICE_FP_STORAGE_KEY);
-    if (!fp) {
-      const array = new Uint8Array(12);
-      window.crypto.getRandomValues(array);
-      const hex = Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('');
-      fp = `DEV-${hex.toUpperCase().slice(0, 16)}`;
+    
+    // If the stored fingerprint was from another device type (e.g. mobile vs PC mismatch), discard and regenerate
+    if (!fp || !fp.startsWith(`${prefix}-${os}-`)) {
+      const array = new Uint8Array(4);
+      if (typeof window !== 'undefined' && window.crypto) {
+        window.crypto.getRandomValues(array);
+      }
+      const randomPart = Array.from(array, (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+      fp = `${expectedPrefix}-${randomPart}`;
       localStorage.setItem(DEVICE_FP_STORAGE_KEY, fp);
     }
     return fp;
@@ -96,7 +142,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
               status: 'active',
               expiry_date: '',
               days_left: 365,
-              max_devices: 10,
+              max_devices: (offlineCheck.cachedLicense as any)?.max_devices || (authSnap.snapshot as any)?.max_devices || 1,
               activated_devices: 1
             },
             device: {
@@ -205,7 +251,7 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
               status: 'active',
               expiry_date: '',
               days_left: 365,
-              max_devices: 10,
+              max_devices: (offlineCheck.cachedLicense as any)?.max_devices || (authSnap.snapshot as any)?.max_devices || 1,
               activated_devices: 1
             },
             device: {
@@ -476,32 +522,6 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
             errorMessage: `تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم (${maxDevs} جهاز). يرجى ترقية الخطة أو تعطيل جهاز آخر أولاً.`,
           });
           return;
-        }
-
-        // Available slot exists! Auto-register new browser/PWA device
-        if (effectiveClientId && licKey) {
-          const regRes = await get().registerTerminal(
-            effectiveClientId,
-            licKey,
-            get().deviceName || 'نقطة بيع - متصفح الويب'
-          );
-
-          if (regRes.success) {
-            set({
-              status: 'active',
-              isActivated: true,
-              errorMessage: null,
-            });
-            return;
-          } else if (regRes.message && regRes.message.includes('الحد الأقصى')) {
-            set({
-              device: null,
-              status: 'unregistered',
-              isActivated: false,
-              errorMessage: regRes.message,
-            });
-            return;
-          }
         }
 
         // Device not registered yet under this client/license

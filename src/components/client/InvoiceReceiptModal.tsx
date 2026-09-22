@@ -191,17 +191,13 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
                   />
                 </div>
               )}
-              {posSettings.show_owner_name !== false && (
-                <>
-                  <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
-                    {client?.business_name || 'Ordexa POS Store'}
-                  </h2>
-                  {(client?.owner_name || client?.customer_name) && (
-                    <p className="text-slate-600 mt-0.5 text-xs">
-                      {client.owner_name || client.customer_name}
-                    </p>
-                  )}
-                </>
+              <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
+                {client?.business_name || 'Ordexa POS Store'}
+              </h2>
+              {posSettings.show_owner_name !== false && (client?.owner_name || client?.customer_name) && (
+                <p className="text-slate-600 mt-0.5 text-xs">
+                  {client.owner_name || client.customer_name}
+                </p>
               )}
               {posSettings.receipt_header && (
                 <p className="text-slate-600 text-xs mt-1">{posSettings.receipt_header}</p>
@@ -238,12 +234,12 @@ export const InvoiceReceiptModal: React.FC<InvoiceReceiptModalProps> = ({
                   <span>{sale.warehouse.name}</span>
                 </div>
               )}
-              {sale.cashier && (
-                <div className="flex justify-between">
-                  <span>الكاشير:</span>
-                  <span>{sale.cashier.full_name}</span>
-                </div>
-              )}
+              <div className="flex justify-between">
+                <span>الكاشير:</span>
+                <span className="font-semibold text-slate-800">
+                  {sale.cashier?.name || (sale.cashier as any)?.full_name || (sale as any)?.cashier_name || 'الكاشير'}
+                </span>
+              </div>
               <div className="flex justify-between">
                 <span>العميل:</span>
                 <span>عميل نقدي عام</span>

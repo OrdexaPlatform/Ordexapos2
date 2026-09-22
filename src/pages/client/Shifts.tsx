@@ -380,8 +380,17 @@ export const ShiftsPage: React.FC = () => {
                       </td>
 
                       {/* Cashier */}
-                      <td className="py-3.5 px-4 font-medium text-slate-800">
-                        {s.cashier_name || 'الكاشير'}
+                      <td className="py-3.5 px-4">
+                        <div className="font-semibold text-slate-800 flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 font-normal">فتح:</span>
+                          <span>{s.cashier_name || 'الكاشير'}</span>
+                        </div>
+                        {s.closed_by_name && (
+                          <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <span className="text-[10px] text-slate-400 font-normal">إغلاق:</span>
+                            <span>{s.closed_by_name}</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Opened At */}

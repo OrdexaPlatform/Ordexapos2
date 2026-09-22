@@ -10,16 +10,28 @@ interface ClientPOSLayoutProps {
 
 export function ClientPOSLayout({ children }: ClientPOSLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const location = useLocation();
+  const isPos = location.pathname.startsWith('/pos');
+
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('ordexa_client_sidebar_collapsed') === 'true';
+      const stored = localStorage.getItem('ordexa_client_sidebar_collapsed');
+      if (stored !== null) return stored === 'true';
+      return isPos;
     } catch {
       return false;
     }
   });
 
-  const location = useLocation();
-  const isPos = location.pathname.startsWith('/pos');
+  // Auto-collapse sidebar on POS screen when screen is < 1440px to ensure full visibility
+  React.useEffect(() => {
+    if (isPos && typeof window !== 'undefined' && window.innerWidth < 1440) {
+      const explicit = localStorage.getItem('ordexa_client_sidebar_collapsed');
+      if (explicit === null) {
+        setIsSidebarCollapsed(true);
+      }
+    }
+  }, [isPos]);
 
   const toggleSidebarCollapse = () => {
     setIsSidebarCollapsed(prev => {

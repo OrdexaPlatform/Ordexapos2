@@ -2071,6 +2071,16 @@ app.post('/api/sales/complete', async (req, res) => {
 
     const productsMap = new Map(productsData.map((p: any) => [p.id, p]));
 
+    // Read client settings to determine if tax is enabled
+    let clientSettings: any = null;
+    try {
+      const settingsPath = getClientSettingsPath(clientId);
+      if (fs.existsSync(settingsPath)) {
+        clientSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      }
+    } catch {}
+    const isTaxEnabled = clientSettings?.enable_tax !== false;
+
     // 2. Compute items and totals
     let totalSubtotal = 0;
     let totalLineDiscounts = 0;
@@ -2085,7 +2095,8 @@ app.post('/api/sales/complete', async (req, res) => {
       const unitPrice = item.unit_price != null && item.unit_price >= 0 ? Number(item.unit_price) : Number(product.selling_price);
       const lineDiscount = Math.min(Number(item.discount_amount || 0), item.quantity * unitPrice);
       const taxableAmount = (item.quantity * unitPrice) - lineDiscount;
-      const itemTax = Math.round(taxableAmount * (Number(product.tax_rate || 0) / 100) * 10000) / 10000;
+      const effectiveItemTaxRate = isTaxEnabled ? Number(product.tax_rate || 0) : 0;
+      const itemTax = isTaxEnabled ? (Math.round(taxableAmount * (effectiveItemTaxRate / 100) * 10000) / 10000) : 0;
       const lineTotal = taxableAmount + itemTax;
 
       totalSubtotal += item.quantity * unitPrice;
@@ -2100,7 +2111,7 @@ app.post('/api/sales/complete', async (req, res) => {
         quantity: item.quantity,
         unit_price: unitPrice,
         discount_amount: lineDiscount,
-        tax_rate: Number(product.tax_rate || 0),
+        tax_rate: effectiveItemTaxRate,
         tax_amount: itemTax,
         line_total: lineTotal,
         track_stock: product.track_stock,

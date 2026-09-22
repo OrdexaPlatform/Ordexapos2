@@ -31,7 +31,10 @@ export class POSPrintManager {
     const posSettings = customSettings || getClientPOSSettings(client?.id);
     const is58 = paperSize === '58mm';
     const isA4 = paperSize === 'a4';
-    const storeName = posSettings.show_owner_name !== false ? (client?.business_name || 'Ordexa POS Store') : '';
+    const storeName = client?.business_name || 'Ordexa POS Store';
+    const ownerNameLine = (posSettings.show_owner_name !== false && (client?.owner_name || client?.customer_name))
+      ? `<div style="font-size: 11px; color: #555; margin-bottom: 2px;">${client.owner_name || client.customer_name}</div>`
+      : '';
     const vatNumber = (posSettings.enable_tax && posSettings.show_tax_number !== false && (posSettings.tax_number || (client as any)?.tax_number))
       ? `الرقم الضريبي: ${posSettings.tax_number || (client as any)?.tax_number}`
       : '';
@@ -89,6 +92,7 @@ export class POSPrintManager {
           <div class="text-center">
             ${client?.logo ? `<div style="margin-bottom: 6px;"><img src="${client.logo}" style="max-height: 48px; max-width: 140px; object-fit: contain;" /></div>` : ''}
             ${storeName ? `<h2 style="margin: 0 0 4px 0; font-size: ${is58 ? '14px' : '17px'};">${storeName}</h2>` : ''}
+            ${ownerNameLine}
             ${headerText}
             ${vatNumber ? `<div>${vatNumber}</div>` : ''}
             ${phone ? `<div>${phone}</div>` : ''}
@@ -111,11 +115,10 @@ export class POSPrintManager {
             <span>الفرع / المستودع:</span>
             <span>${sale.warehouse.name}</span>
           </div>` : ''}
-          ${sale.cashier ? `
           <div class="row">
             <span>الكاشير:</span>
-            <span>${sale.cashier.name || (sale.cashier as any).full_name || 'الكاشير'}</span>
-          </div>` : ''}
+            <span>${sale.cashier?.name || (sale.cashier as any)?.full_name || (sale as any)?.cashier_name || 'الكاشير'}</span>
+          </div>
 
           <div class="divider-solid"></div>
 

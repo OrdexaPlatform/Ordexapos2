@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Product, CartItem } from '../types';
+import { playScannerBeep } from '../utils/audio';
 
 interface POSCartState {
   items: CartItem[];
@@ -136,6 +137,7 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
       };
 
       set({ items: updatedItems });
+      playScannerBeep();
       return { success: true };
     } else {
       // Stock validation
@@ -164,6 +166,7 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
       };
 
       set({ items: [newItem, ...state.items] });
+      playScannerBeep();
       return { success: true };
     }
   },

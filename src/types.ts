@@ -519,6 +519,7 @@ export interface Shift {
   opened_by_user?: ClientUser;
   closed_by_user?: ClientUser;
   cashier_name?: string;
+  closed_by_name?: string;
   register_name?: string;
   warehouse_name?: string;
 }

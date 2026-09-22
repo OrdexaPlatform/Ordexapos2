@@ -1,5 +1,4 @@
 import { ClientPOSSettings } from '../types';
-import { offlineStorage } from './offline/offlineStorage';
 
 export const DEFAULT_POS_SETTINGS: ClientPOSSettings = {
   enable_tax: true,
@@ -75,7 +74,6 @@ export async function fetchClientPOSSettings(clientId: string): Promise<ClientPO
           // Save locally
           try {
             localStorage.setItem(`ordexa_pos_settings_${clientId}`, JSON.stringify(merged));
-            await offlineStorage.set(`pos_settings_${clientId}`, merged);
           } catch {}
 
           return merged;
@@ -86,23 +84,12 @@ export async function fetchClientPOSSettings(clientId: string): Promise<ClientPO
     }
   }
 
-  // 2. Check IndexedDB
-  try {
-    const idbSettings = await offlineStorage.get<ClientPOSSettings>(`pos_settings_${clientId}`);
-    if (idbSettings) {
-      return {
-        ...DEFAULT_POS_SETTINGS,
-        ...idbSettings,
-      };
-    }
-  } catch {}
-
-  // 3. Check localStorage
+  // 2. Check localStorage
   return getClientPOSSettings(clientId);
 }
 
 /**
- * Saves settings to server, local storage, and IndexedDB, then notifies all listeners.
+ * Saves settings to server and local storage, then notifies all listeners.
  */
 export async function saveClientPOSSettings(
   clientId: string,
@@ -122,12 +109,7 @@ export async function saveClientPOSSettings(
     console.warn('[clientSettingsService] LocalStorage set error:', err);
   }
 
-  // 2. Cache in IndexedDB for offline reliability
-  try {
-    await offlineStorage.set(`pos_settings_${clientId}`, updated);
-  } catch {}
-
-  // 3. Broadcast update to active tabs and POS instances
+  // 2. Broadcast update to active tabs and POS instances
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent(SETTINGS_EVENT_NAME, {

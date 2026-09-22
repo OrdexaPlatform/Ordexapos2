@@ -16,6 +16,7 @@ import {
   subscribeToInstallPrompt, 
   isPwaStandalone 
 } from '../../lib/pwa/pwaService';
+import { isElectronApp } from '../../lib/electronBridge';
 import toast from 'react-hot-toast';
 
 interface InstallPwaButtonProps {
@@ -33,16 +34,31 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
 }) => {
   const [canDirectInstall, setCanDirectInstall] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('ordexa_pwa_dismissed') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [showGuideModal, setShowGuideModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'desktop' | 'android' | 'ios'>('desktop');
 
   useEffect(() => {
-    setIsStandalone(isPwaStandalone());
+    const standaloneMode = isPwaStandalone() || isElectronApp();
+    setIsStandalone(standaloneMode);
     const unsubscribe = subscribeToInstallPrompt((canInstall) => {
       setCanDirectInstall(canInstall);
     });
     return () => unsubscribe();
   }, []);
+
+  const handleDismiss = () => {
+    setIsDismissed(true);
+    try {
+      localStorage.setItem('ordexa_pwa_dismissed', 'true');
+    } catch {}
+  };
 
   const handleInstallClick = async () => {
     if (isStandalone) {
@@ -54,6 +70,7 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
       const outcome = await promptPwaInstall();
       if (outcome === 'accepted') {
         toast.success('جارٍ تثبيت تطبيق الكاشير على جهازك...');
+        setIsStandalone(true);
       } else if (outcome === 'dismissed') {
         toast('تم إلغاء التثبيت مؤقتاً', { icon: 'ℹ️' });
       } else {
@@ -64,7 +81,7 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
     }
   };
 
-  // If already running as installed PWA, render a small active badge or nothing in header
+  // If already running as installed PWA or native, render a small active badge in header
   if (isStandalone && variant === 'header') {
     return (
       <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs">
@@ -72,6 +89,11 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
         <span className="hidden sm:inline">نسخة مثبتة (أوفلاين)</span>
       </div>
     );
+  }
+
+  // If already installed or dismissed, completely hide the hero banner and compact prompts
+  if (isStandalone || isDismissed) {
+    return null;
   }
 
   // Header / Compact Variant
@@ -97,6 +119,16 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
   return (
     <>
       <div className={`w-full bg-gradient-to-br from-indigo-900 via-slate-900 to-slate-950 p-5 sm:p-6 rounded-2xl border border-indigo-500/30 shadow-xl text-white relative overflow-hidden ${className}`}>
+        {/* Close / Dismiss button */}
+        <button
+          type="button"
+          onClick={handleDismiss}
+          className="absolute top-4 left-4 p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors z-20"
+          title="إخفاء هذه الرسالة"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
         {/* Subtle background glow */}
         <div className="absolute top-0 end-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 

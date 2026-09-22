@@ -550,13 +550,29 @@ export async function validatePOSLicense(
           };
         }
       } else {
-        deviceData = {
-          id: '',
-          device_name: 'جهاز غير مسجل',
-          device_fingerprint: deviceFingerprint,
-          status: 'unregistered',
-          is_registered: false,
-          is_active: false,
+        return {
+          is_valid: false,
+          error_code: 'DEVICE_UNREGISTERED',
+          message: 'هذا الجهاز غير مسجل ضمن الأجهزة المصرح لها في المنشأة. يرجى تفعيله من لوحة الإدارة أولاً.',
+          client,
+          license: {
+            id: license.id,
+            license_key: license.license_key,
+            license_type: license.license_type,
+            status: license.status,
+            expiry_date: license.expiry_date,
+            days_left: daysLeft,
+            max_devices: license.max_devices,
+            activated_devices: license.activated_devices,
+          },
+          device: {
+            id: '',
+            device_name: 'جهاز غير مسجل',
+            device_fingerprint: deviceFingerprint,
+            status: 'unregistered',
+            is_registered: false,
+            is_active: false,
+          },
         };
       }
     }

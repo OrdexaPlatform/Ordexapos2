@@ -507,7 +507,7 @@ export const POSTerminalConfigModal: React.FC<POSTerminalConfigModalProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 font-medium">الحد الأقصى للأجهزة:</span>
                   <span className="font-mono font-bold text-slate-800">
-                    {licenseValidation?.license?.activated_devices || 1} من أصل {licenseValidation?.license?.max_devices || 10}
+                    {licenseValidation?.license?.activated_devices ?? 0} من أصل {licenseValidation?.license?.max_devices ?? 1}
                   </span>
                 </div>
 

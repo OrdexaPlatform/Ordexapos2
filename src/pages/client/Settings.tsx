@@ -30,6 +30,11 @@ import { supabase } from '../../lib/supabase';
 import { Warehouse, Client } from '../../types';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { 
+  getClientPOSSettings, 
+  fetchClientPOSSettings, 
+  saveClientPOSSettings 
+} from '../../lib/clientSettingsService';
 
 export function ClientSettings() {
   const { client, license, effectiveLicenseStatus, loadClient } = useClientStore();
@@ -50,8 +55,13 @@ export function ClientSettings() {
   const [logo, setLogo] = useState('');
   const [currency, setCurrency] = useState('EGP');
   const [language, setLanguage] = useState('ar');
+  const [enableTax, setEnableTax] = useState<boolean>(true);
   const [taxNumber, setTaxNumber] = useState('');
   const [taxRate, setTaxRate] = useState<number>(14);
+  const [showOwnerName, setShowOwnerName] = useState<boolean>(true);
+  const [showPhone, setShowPhone] = useState<boolean>(true);
+  const [showAddress, setShowAddress] = useState<boolean>(true);
+  const [showTaxNumber, setShowTaxNumber] = useState<boolean>(true);
   const [receiptHeader, setReceiptHeader] = useState('');
   const [receiptFooter, setReceiptFooter] = useState('');
   const [paperSize, setPaperSize] = useState<'80mm' | '58mm'>('80mm');
@@ -70,19 +80,36 @@ export function ClientSettings() {
       setCurrency(client.currency || 'EGP');
       setLanguage(client.language || 'ar');
 
-      // Load client-specific POS and receipt preferences safely from local storage
-      try {
-        const savedConfig = localStorage.getItem(`ordexa_pos_settings_${client.id}`);
-        if (savedConfig) {
-          const parsed = JSON.parse(savedConfig);
-          if (parsed.receipt_header !== undefined) setReceiptHeader(parsed.receipt_header);
-          if (parsed.receipt_footer !== undefined) setReceiptFooter(parsed.receipt_footer);
-          if (parsed.tax_number !== undefined) setTaxNumber(parsed.tax_number);
-          if (parsed.tax_rate !== undefined) setTaxRate(parsed.tax_rate);
-          if (parsed.paper_size !== undefined) setPaperSize(parsed.paper_size);
-          if (parsed.default_warehouse_id) setDefaultWarehouseId(parsed.default_warehouse_id);
+      // Load client-specific POS and receipt preferences safely
+      const cached = getClientPOSSettings(client.id);
+      setEnableTax(cached.enable_tax !== undefined ? cached.enable_tax : true);
+      setTaxRate(cached.tax_rate !== undefined ? cached.tax_rate : 14);
+      setTaxNumber(cached.tax_number || '');
+      setShowOwnerName(cached.show_owner_name !== undefined ? cached.show_owner_name : true);
+      setShowPhone(cached.show_phone !== undefined ? cached.show_phone : true);
+      setShowAddress(cached.show_address !== undefined ? cached.show_address : true);
+      setShowTaxNumber(cached.show_tax_number !== undefined ? cached.show_tax_number : true);
+      if (cached.receipt_header !== undefined) setReceiptHeader(cached.receipt_header);
+      if (cached.receipt_footer !== undefined) setReceiptFooter(cached.receipt_footer);
+      if (cached.paper_size !== undefined) setPaperSize(cached.paper_size);
+      if (cached.default_warehouse_id) setDefaultWarehouseId(cached.default_warehouse_id);
+
+      // Also fetch fresh from server
+      fetchClientPOSSettings(client.id).then((fresh) => {
+        if (fresh) {
+          setEnableTax(fresh.enable_tax !== undefined ? fresh.enable_tax : true);
+          setTaxRate(fresh.tax_rate !== undefined ? fresh.tax_rate : 14);
+          if (fresh.tax_number !== undefined) setTaxNumber(fresh.tax_number);
+          setShowOwnerName(fresh.show_owner_name !== undefined ? fresh.show_owner_name : true);
+          setShowPhone(fresh.show_phone !== undefined ? fresh.show_phone : true);
+          setShowAddress(fresh.show_address !== undefined ? fresh.show_address : true);
+          setShowTaxNumber(fresh.show_tax_number !== undefined ? fresh.show_tax_number : true);
+          if (fresh.receipt_header !== undefined) setReceiptHeader(fresh.receipt_header);
+          if (fresh.receipt_footer !== undefined) setReceiptFooter(fresh.receipt_footer);
+          if (fresh.paper_size !== undefined) setPaperSize(fresh.paper_size);
+          if (fresh.default_warehouse_id) setDefaultWarehouseId(fresh.default_warehouse_id);
         }
-      } catch {}
+      }).catch(() => {});
     }
   }, [client]);
 
@@ -130,18 +157,26 @@ export function ClientSettings() {
       updated_at: new Date().toISOString(),
     };
 
-    // Save POS-specific configuration locally and in cache
+    // Save POS-specific configuration locally, on server and dispatch event
     const posPreferences = {
+      enable_tax: Boolean(enableTax),
       tax_number: taxNumber.trim(),
       tax_rate: Number(taxRate) || 0,
+      show_owner_name: Boolean(showOwnerName),
+      show_phone: Boolean(showPhone),
+      show_address: Boolean(showAddress),
+      show_tax_number: Boolean(showTaxNumber),
       receipt_header: receiptHeader.trim(),
       receipt_footer: receiptFooter.trim(),
       paper_size: paperSize,
       default_warehouse_id: defaultWarehouseId || null,
     };
+
     try {
-      localStorage.setItem(`ordexa_pos_settings_${client.id}`, JSON.stringify(posPreferences));
-    } catch {}
+      await saveClientPOSSettings(client.id, posPreferences);
+    } catch (posErr) {
+      console.warn('Could not save POS settings:', posErr);
+    }
 
     try {
       // 1. If default warehouse was selected, set is_default in warehouses table
@@ -429,6 +464,30 @@ export function ClientSettings() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Tax Enable Toggle Card */}
+                <div className="sm:col-span-2 p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <label className="text-sm font-bold text-slate-900 cursor-pointer" htmlFor="enable-tax-toggle">
+                        تفعيل حساب وتطبيق ضريبة القيمة المضافة (VAT)
+                      </label>
+                      <p className="text-xs text-slate-500">
+                        عند إلغاء هذا الخيار، يتم إيقاف احتساب أي ضريبة فوراً على كافة المبيعات وشاشات الكاشير وتكون قيمة الضريبة 0.00.
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        id="enable-tax-toggle"
+                        checked={enableTax}
+                        onChange={(e) => setEnableTax(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-300 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
                     العملة الأساسية للنظام *
@@ -582,6 +641,69 @@ export function ClientSettings() {
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 focus:outline-none focus:border-indigo-500 focus:bg-white"
                   />
                 </div>
+
+                {/* Toggles for info visibility on printed receipts */}
+                <div className="pt-4 border-t border-slate-100 space-y-3">
+                  <h4 className="text-xs font-bold text-slate-800">بيانات الترويسة المطبوعة على الفاتورة:</h4>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Owner Name Toggle */}
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={showOwnerName}
+                        onChange={(e) => setShowOwnerName(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded-sm border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-bold text-slate-900 block">ظهور اسم المالك / المسؤول</span>
+                        <span className="text-slate-500 text-[11px] block">{ownerName || customerName ? `(${ownerName || customerName})` : 'اسم مالك الحساب'}</span>
+                      </div>
+                    </label>
+
+                    {/* Phone Number Toggle */}
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={showPhone}
+                        onChange={(e) => setShowPhone(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded-sm border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-bold text-slate-900 block">ظهور رقم الهاتف</span>
+                        <span className="text-slate-500 text-[11px] block" dir="ltr">{phone ? phone : 'رقم التواصل'}</span>
+                      </div>
+                    </label>
+
+                    {/* Tax Number Toggle */}
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={showTaxNumber}
+                        onChange={(e) => setShowTaxNumber(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded-sm border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-bold text-slate-900 block">ظهور الرقم الضريبي</span>
+                        <span className="text-slate-500 text-[11px] block">{taxNumber ? `(${taxNumber})` : 'الرقم الضريبي'}</span>
+                      </div>
+                    </label>
+
+                    {/* Address Toggle */}
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-100/70 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={showAddress}
+                        onChange={(e) => setShowAddress(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded-sm border-slate-300 focus:ring-indigo-500"
+                      />
+                      <div className="text-xs">
+                        <span className="font-bold text-slate-900 block">ظهور عنوان المنشأة</span>
+                        <span className="text-slate-500 text-[11px] block">{address ? address : 'عنوان الفرع'}</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -625,7 +747,7 @@ export function ClientSettings() {
                 <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
                   <span className="text-slate-400 block">الأجهزة المفعلة</span>
                   <span className="font-bold text-slate-900 text-sm">
-                    {license?.activated_devices || 1} من {license?.max_devices || 10} أجهزة
+                    {license?.activated_devices ?? 0} من {license?.max_devices ?? 1} أجهزة
                   </span>
                 </div>
 
@@ -699,13 +821,20 @@ export function ClientSettings() {
                 )}
 
                 <h4 className="font-extrabold text-slate-900 text-sm">{businessName || 'اسم المنشأة'}</h4>
+                {showOwnerName && (ownerName || customerName) && (
+                  <p className="text-slate-600 text-[10px] font-bold">{ownerName || customerName}</p>
+                )}
                 {receiptHeader && <p className="text-slate-600 text-[10px]">{receiptHeader}</p>}
-                {phone && <p className="text-slate-500 text-[10px]" dir="ltr">{phone}</p>}
-                {address && <p className="text-slate-500 text-[10px]">{address}</p>}
-                {taxNumber && <p className="text-slate-500 text-[10px]">الرقم الضريبي: {taxNumber}</p>}
+                {showPhone && phone && <p className="text-slate-500 text-[10px]" dir="ltr">{phone}</p>}
+                {showAddress && address && <p className="text-slate-500 text-[10px]">{address}</p>}
+                {enableTax && showTaxNumber && taxNumber && (
+                  <p className="text-slate-500 text-[10px]">الرقم الضريبي: {taxNumber}</p>
+                )}
 
                 <div className="border-t border-b border-dashed border-slate-300 py-1 my-1">
-                  <span className="font-bold text-slate-800 text-[11px]">فاتورة ضريبية مبسطة</span>
+                  <span className="font-bold text-slate-800 text-[11px]">
+                    {enableTax ? 'فاتورة ضريبية مبسطة' : 'فاتورة مبيعات'}
+                  </span>
                 </div>
 
                 <div className="text-[10px] text-slate-500 space-y-0.5 text-right">
@@ -724,10 +853,17 @@ export function ClientSettings() {
                     <span>الإجمالي:</span>
                     <span>150.00 {currency}</span>
                   </div>
-                  <div className="flex justify-between text-slate-500 text-[9px]">
-                    <span>شامل الضريبة ({taxRate}%):</span>
-                    <span>{((150 * taxRate) / (100 + taxRate)).toFixed(2)} {currency}</span>
-                  </div>
+                  {enableTax ? (
+                    <div className="flex justify-between text-slate-500 text-[9px]">
+                      <span>شامل الضريبة ({taxRate}%):</span>
+                      <span>{((150 * taxRate) / (100 + taxRate)).toFixed(2)} {currency}</span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between text-slate-500 text-[9px]">
+                      <span>الضريبة:</span>
+                      <span>غير خاضع للضريبة (0.00)</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="border-t border-dashed border-slate-300 pt-2 text-[9px] text-slate-500">

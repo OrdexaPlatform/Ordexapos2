@@ -30,7 +30,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
   const [registers, setRegisters] = useState<CashRegister[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>(defaultWarehouseId || '');
   const [selectedRegisterId, setSelectedRegisterId] = useState<string>('');
-  const [openingCash, setOpeningCash] = useState<number>(0);
+  const [openingCash, setOpeningCash] = useState<string>('0');
   const [notes, setNotes] = useState<string>('');
   const [isFetching, setIsFetching] = useState<boolean>(false);
 
@@ -72,7 +72,8 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
   };
 
   const addCashAmount = (amount: number) => {
-    setOpeningCash(prev => Number((prev + amount).toFixed(2)));
+    const current = parseFloat(openingCash) || 0;
+    setOpeningCash(String(Number((current + amount).toFixed(2))));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -92,7 +93,8 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
       return;
     }
 
-    if (openingCash < 0) {
+    const cashValue = openingCash === '' ? 0 : parseFloat(openingCash);
+    if (isNaN(cashValue) || cashValue < 0) {
       toast.error('الرصيد الافتتاحي لا يمكن أن يكون سالباً');
       return;
     }
@@ -104,7 +106,7 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
         register_id: selectedRegisterId || undefined,
         device_id: device?.id || undefined,
         device_fingerprint: fingerprint,
-        opening_cash: openingCash,
+        opening_cash: cashValue,
         opening_notes: notes.trim() || undefined,
         user_id: user?.id,
         opened_by: clientUser?.id,
@@ -254,12 +256,11 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
-                value={openingCash === 0 ? '' : openingCash}
-                onChange={(e) => setOpeningCash(parseFloat(e.target.value) || 0)}
+                value={openingCash}
+                onChange={(e) => setOpeningCash(e.target.value)}
                 placeholder="0.00"
                 className="w-full h-12 pr-11 pl-4 text-left font-mono text-lg font-bold text-slate-900 bg-slate-50/50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 dir="ltr"
-                required
               />
             </div>
 
@@ -277,10 +278,10 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
               ))}
               <button
                 type="button"
-                onClick={() => setOpeningCash(0)}
+                onClick={() => setOpeningCash('0')}
                 className="py-1.5 px-3 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors"
               >
-                تصفير
+                تصفير (0)
               </button>
             </div>
           </div>

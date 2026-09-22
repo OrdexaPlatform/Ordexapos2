@@ -780,6 +780,7 @@ export const shiftService = {
     return (data || []).map((item) => ({
       ...item,
       cashier_name: (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير',
+      closed_by_name: (item.closed_by_user as any)?.name || (item.closed_by_user as any)?.full_name || null,
       register_name: item.register?.name || 'الصندوق الرئيسي',
       warehouse_name: item.warehouse?.name || 'المستودع',
     }));
@@ -806,6 +807,7 @@ export const shiftService = {
     return {
       ...data,
       cashier_name: (data.opened_by_user as any)?.name || (data.opened_by_user as any)?.full_name || 'الكاشير',
+      closed_by_name: (data.closed_by_user as any)?.name || (data.closed_by_user as any)?.full_name || null,
       register_name: data.register?.name || 'الصندوق الرئيسي',
       warehouse_name: data.warehouse?.name || 'المستودع',
     };

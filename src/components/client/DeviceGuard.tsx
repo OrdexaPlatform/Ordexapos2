@@ -54,16 +54,20 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
     }
   };
 
-  // Safety timeout: never allow infinite loading screen in POS terminal
+  // Safety timeout: if loading exceeds 8 seconds, set to unregistered/error instead of bypassing
   React.useEffect(() => {
     let timer: NodeJS.Timeout;
     if (status === 'loading') {
       timer = setTimeout(() => {
         if (useDeviceStore.getState().status === 'loading') {
-          console.warn('Device verification timed out, promoting to active based on valid session');
-          useDeviceStore.setState({ status: 'active', isActivated: true });
+          console.warn('Device verification timed out.');
+          useDeviceStore.setState({ 
+            status: 'unregistered', 
+            isActivated: false,
+            errorMessage: 'انتهت مهلة التحقق من تصريح الجهاز. يرجى الضغط على إعادة الفحص أو التأكد من تسجيل بصمة الجهاز في النظام.' 
+          });
         }
-      }, 3500);
+      }, 8000);
     }
     return () => clearTimeout(timer);
   }, [status]);
@@ -79,11 +83,22 @@ export function DeviceGuard({ children }: DeviceGuardProps) {
     );
   }
 
-  // If the device is active and verified (or offline with previous local registration), render the POS app children
+  // If the device is active and verified (or verified offline for THIS exact fingerprint), render POS
   const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
-  const isRegisteredLocally = client?.id && typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${client.id}`);
+  let matchesStoredDev = false;
+  if (isOffline && client?.id && typeof localStorage !== 'undefined') {
+    try {
+      const storedDev = localStorage.getItem(`ordexa_device_${client.id}`);
+      if (storedDev) {
+        const parsed = JSON.parse(storedDev);
+        if (parsed?.device_fingerprint === fingerprint && parsed?.status === 'active') {
+          matchesStoredDev = true;
+        }
+      }
+    } catch {}
+  }
   
-  if ((isActivated && status === 'active') || (isOffline && (isRegisteredLocally || useDeviceStore.getState().isOfflineGraceActive))) {
+  if ((isActivated && status === 'active') || (isOffline && (matchesStoredDev || useDeviceStore.getState().isOfflineGraceActive))) {
     return <>{children}</>;
   }
 

@@ -22,7 +22,9 @@ import {
   Edit2,
   Lock,
   Monitor,
-  Settings
+  Settings,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
@@ -43,6 +45,7 @@ import { POSShiftBar } from '../../components/client/shifts/POSShiftBar';
 import { OpenShiftModal } from '../../components/client/shifts/OpenShiftModal';
 import { Store } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { fetchClientPOSSettings, getClientPOSSettings } from '../../lib/clientSettingsService';
 
 export const POSPage: React.FC = () => {
   const { clientUser } = useAuthStore();
@@ -77,6 +80,7 @@ export const POSPage: React.FC = () => {
     setCustomerName,
     setNotes: setCartNotes,
     setInvoiceDiscount,
+    setTaxConfig,
     addItem,
     updateItemQuantity,
     updateItemPrice,
@@ -109,6 +113,28 @@ export const POSPage: React.FC = () => {
   const [itemDiscountInputValue, setItemDiscountInputValue] = useState<number>(0);
   const [activePriceEditItemId, setActivePriceEditItemId] = useState<string | null>(null);
   const [itemPriceInputValue, setItemPriceInputValue] = useState<number>(0);
+  const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog');
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => {
+        setIsFullscreen(true);
+      }).catch(() => {});
+    } else {
+      document.exitFullscreen().then(() => {
+        setIsFullscreen(false);
+      }).catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -257,8 +283,33 @@ export const POSPage: React.FC = () => {
     loadPOSData();
     if (clientId) {
       loadActiveShift(clientId);
+
+      // Apply and synchronize POS tax configuration
+      const applySettings = (settings: any) => {
+        if (settings) {
+          setTaxConfig(settings.enable_tax !== false, settings.tax_rate ?? 14);
+        }
+      };
+
+      const initialSettings = getClientPOSSettings(clientId);
+      applySettings(initialSettings);
+
+      fetchClientPOSSettings(clientId).then(applySettings).catch(() => {});
+
+      const handleSettingsUpdate = (e: any) => {
+        if (e?.detail?.settings) {
+          applySettings(e.detail.settings);
+        } else {
+          fetchClientPOSSettings(clientId).then(applySettings).catch(() => {});
+        }
+      };
+
+      window.addEventListener('ordexa:pos-settings-updated', handleSettingsUpdate as EventListener);
+      return () => {
+        window.removeEventListener('ordexa:pos-settings-updated', handleSettingsUpdate as EventListener);
+      };
     }
-  }, [clientId]);
+  }, [clientId, setTaxConfig]);
 
   // Keyboard Shortcuts (F2: Search, F4: Pay, Esc: Clear/Close)
   useEffect(() => {
@@ -659,6 +710,14 @@ export const POSPage: React.FC = () => {
           </button>
 
           <button
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "الخروج من وضع ملء الشاشة" : "تكبير شاشة الكاشير بالكامل"}
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 text-amber-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
             onClick={loadPOSData}
             title="تحديث البيانات"
             className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
@@ -681,6 +740,39 @@ export const POSPage: React.FC = () => {
         }} 
       />
 
+      {/* Mobile / Compact Screen Pane Switcher (< md) */}
+      <div className="flex md:hidden border-b border-slate-200 bg-white p-1.5 gap-1.5 shrink-0 select-none shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setMobileTab('catalog')}
+          className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === 'catalog'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}
+        >
+          <Search className="w-3.5 h-3.5" />
+          <span>الأصناف والبحث</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('cart')}
+          className={`flex-1 py-2 px-3 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+            mobileTab === 'cart'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+          }`}
+        >
+          <ShoppingCart className="w-3.5 h-3.5" />
+          <span>سلة البيع ({getItemsCount()})</span>
+          {getGrandTotal() > 0 && (
+            <span className="font-mono text-[11px] font-extrabold bg-black/20 px-1.5 py-0.5 rounded-md">
+              {formatCurrency(getGrandTotal())}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Error alert if any */}
       {errorMessage && (
         <div className="flex items-center justify-between px-4 py-2 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs shrink-0">
@@ -694,11 +786,11 @@ export const POSPage: React.FC = () => {
         </div>
       )}
 
-      {/* Main Dual Pane Layout */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+      {/* Main Dual Pane Layout: Responsive side-by-side on md+ without horizontal scrolling */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0 min-w-0">
         
-        {/* Left / Center: Catalog & Product Search (Width: ~65%) */}
-        <div className="flex-1 flex flex-col border-l border-slate-200 bg-white overflow-hidden">
+        {/* Left / Center: Catalog & Product Search */}
+        <div className={`flex-1 flex-col border-l border-slate-200 bg-white overflow-hidden min-w-0 ${mobileTab === 'catalog' ? 'flex' : 'hidden md:flex'}`}>
           
           {/* Professional Search Bar */}
           <div className="p-3 border-b border-slate-200 bg-slate-50 shrink-0">
@@ -881,10 +973,33 @@ export const POSPage: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Mobile Quick Checkout Sticky Bar (< md) */}
+          {cartItems.length > 0 && mobileTab === 'catalog' && (
+            <div className="md:hidden p-2.5 bg-slate-900 text-white flex items-center justify-between border-t border-slate-800 shadow-lg shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-indigo-600 text-white font-mono font-bold text-xs flex items-center justify-center">
+                  {getItemsCount()}
+                </span>
+                <span className="text-xs font-medium text-slate-200">الإجمالي:</span>
+                <span className="text-xs font-mono font-extrabold text-emerald-400">
+                  {formatCurrency(getGrandTotal())}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileTab('cart')}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-extrabold rounded-lg shadow-2xs transition-all flex items-center gap-1.5"
+              >
+                <span>متابعة الدفع</span>
+                <CornerDownLeft className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right Pane: Cart, Totals & Checkout Actions (Responsive Width) */}
-        <div className="w-full lg:w-80 xl:w-96 2xl:w-[420px] flex flex-col bg-slate-50 border-r border-slate-200 shrink-0">
+        <div className={`w-full md:w-72 lg:w-80 xl:w-96 2xl:w-[420px] flex-col bg-slate-50 border-r border-slate-200 shrink-0 min-w-0 ${mobileTab === 'cart' ? 'flex' : 'hidden md:flex'}`}>
           
           {/* Cart Header */}
           <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
