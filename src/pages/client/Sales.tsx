@@ -476,12 +476,13 @@ export const SalesPage: React.FC = () => {
                         {/* Print / Reprint Receipt */}
                         <PermissionGuard permission="sales.print">
                           <button
+                            id={`btn-reprint-${s.id}`}
                             onClick={() => handleOpenPrint(s)}
                             title="إعادة طباعة الفاتورة (Reprint)"
-                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-colors"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-colors border border-slate-300 shadow-2xs"
                           >
-                            <Printer className="w-3.5 h-3.5 text-slate-600" />
-                            <span>إعادة طباعة</span>
+                            <Printer className="w-3.5 h-3.5 text-slate-700" />
+                            <span>إعادة طباعة (Reprint)</span>
                           </button>
                         </PermissionGuard>
 

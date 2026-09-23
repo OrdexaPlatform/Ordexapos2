@@ -512,13 +512,13 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
           }
         }
 
-        if (maxDevs && actDevs >= maxDevs) {
+        if ((maxDevs && actDevs >= maxDevs) || val?.error_code === 'MAX_DEVICES_REACHED') {
           // Device quota fully utilized
           set({
             device: null,
             status: 'unregistered',
             isActivated: false,
-            errorMessage: `تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم (${maxDevs} جهاز). يرجى ترقية الخطة أو تعطيل جهاز آخر أولاً.`,
+            errorMessage: 'تم الوصول إلى الحد الأقصى للأجهزة المسموح بها لهذا الترخيص. يرجى التواصل مع الإدارة لتفعيل هذا الجهاز.',
           });
           return;
         }

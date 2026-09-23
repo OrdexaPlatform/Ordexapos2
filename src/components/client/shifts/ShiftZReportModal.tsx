@@ -172,23 +172,39 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
                   <span className="font-bold font-mono">-{shift.total_cash_out.toFixed(2)}</span>
                 </div>
               )}
+              {/* Expected Cash */}
               <div className="flex justify-between pt-1 border-t border-slate-200 font-black text-slate-900">
-                <span>النقد المتوقع بالدرج:</span>
+                <span>الرصيد المتوقع:</span>
                 <span className="font-mono">{shift.closing_cash_expected.toFixed(2)} {currencySymbol}</span>
               </div>
 
               {(isClosed || (shift.closing_cash_actual !== null && shift.closing_cash_actual !== undefined)) && (
                 <>
+                  {/* Actual Cash */}
                   <div className="flex justify-between font-black text-slate-900 pt-1">
-                    <span>النقد الفعلي المعدود:</span>
+                    <span>النقدية الفعلية:</span>
                     <span className="font-mono">{Number(shift.closing_cash_actual || 0).toFixed(2)} {currencySymbol}</span>
                   </div>
-                  <div className={`flex justify-between font-black p-2 rounded-lg mt-1 ${
+
+                  {/* Difference */}
+                  <div className="flex justify-between font-black text-slate-900 pt-1">
+                    <span>الفرق:</span>
+                    <span className="font-mono" dir="ltr">
+                      {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} {currencySymbol}
+                    </span>
+                  </div>
+
+                  {/* Status */}
+                  <div className={`flex justify-between font-black p-2.5 rounded-lg mt-1 text-xs ${
                     difference === 0 ? 'bg-emerald-50 text-emerald-800' : difference < 0 ? 'bg-rose-50 text-rose-800' : 'bg-blue-50 text-blue-800'
                   }`}>
-                    <span>فارق الصندوق:</span>
-                    <span className="font-mono font-black" dir="ltr">
-                      {difference === 0 ? '0.00 (مطابق تماماً)' : difference > 0 ? `+${difference.toFixed(2)} (فائض في الدرج)` : `${difference.toFixed(2)} (عجز في الدرج)`}
+                    <span>الحالة:</span>
+                    <span className="font-black">
+                      {difference === 0 
+                        ? 'مطابق' 
+                        : difference < 0 
+                          ? `عجز ${Math.abs(difference).toFixed(2)} ${currencySymbol}` 
+                          : `فائض ${difference.toFixed(2)} ${currencySymbol}`}
                     </span>
                   </div>
                 </>

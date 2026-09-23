@@ -49,6 +49,40 @@ export function LicenseDetails() {
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [isDeviceDetailsOpen, setIsDeviceDetailsOpen] = useState(false);
   const [isRegisterDeviceOpen, setIsRegisterDeviceOpen] = useState(false);
+  const [isEditingMaxDevices, setIsEditingMaxDevices] = useState(false);
+  const [newMaxDevices, setNewMaxDevices] = useState<number>(1);
+
+  const handleSaveMaxDevices = async () => {
+    if (!license) return;
+    if (newMaxDevices < 1) {
+      toast.error('الحد الأدنى للأجهزة يجب ألا يقل عن 1');
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('licenses')
+        .update({ max_devices: newMaxDevices, updated_at: new Date().toISOString() })
+        .eq('id', license.id);
+      if (error) throw error;
+
+      await logActivity({
+        action: 'update_max_devices',
+        entityType: 'license',
+        entityId: license.id,
+        metadata: {
+          license_key: license.license_key,
+          previous_max: license.max_devices,
+          new_max: newMaxDevices,
+        },
+      });
+
+      toast.success(`تم تحديث الحد الأقصى للأجهزة إلى ${newMaxDevices} بنجاح`);
+      setIsEditingMaxDevices(false);
+      await fetchLicenseData();
+    } catch (err: any) {
+      toast.error(err.message || 'فشل تحديث الحد الأقصى للأجهزة');
+    }
+  };
 
   const handleDeactivateDevice = async (device: Device) => {
     if (!window.confirm(`هل أنت متأكد من رغبتك في إلغاء تفعيل الجهاز "${device.device_name}"؟ سيتم تحرير المقعد في هذا الترخيص فوراً دون حذف سجل الجهاز.`)) {
@@ -342,11 +376,52 @@ export function LicenseDetails() {
             </div>
 
             <div>
-              <div className="text-xs font-medium text-slate-400 mb-0.5">حصة الأجهزة</div>
-              <div className="text-slate-900">
-                <span className="font-bold text-base">{license.activated_devices}</span> جهاز مفعل من أصل{' '}
-                <span className="font-bold">{license.max_devices}</span> جهاز مسموح
+              <div className="flex items-center justify-between text-xs font-medium text-slate-400 mb-1">
+                <span>حصة الأجهزة (Max Devices)</span>
+                {!isEditingMaxDevices && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewMaxDevices(license.max_devices || 1);
+                      setIsEditingMaxDevices(true);
+                    }}
+                    className="text-blue-600 hover:text-blue-700 text-xs font-bold underline cursor-pointer"
+                  >
+                    تعديل الحد
+                  </button>
+                )}
               </div>
+              {isEditingMaxDevices ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    type="number"
+                    min="1"
+                    value={newMaxDevices}
+                    onChange={(e) => setNewMaxDevices(parseInt(e.target.value) || 1)}
+                    className="w-20 px-2.5 py-1 text-sm font-bold border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-center"
+                    dir="ltr"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveMaxDevices}
+                    className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 shadow-xs cursor-pointer"
+                  >
+                    حفظ
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingMaxDevices(false)}
+                    className="px-2 py-1 bg-slate-100 text-slate-600 text-xs font-medium rounded-lg hover:bg-slate-200 cursor-pointer"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              ) : (
+                <div className="text-slate-900">
+                  <span className="font-bold text-base">{license.activated_devices}</span> جهاز مفعل من أصل{' '}
+                  <span className="font-bold text-base text-blue-700">{license.max_devices}</span> جهاز مسموح
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">

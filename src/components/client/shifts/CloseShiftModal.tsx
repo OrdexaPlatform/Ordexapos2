@@ -38,7 +38,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   const { closeShift, isLoading } = useShiftStore();
 
   const [summary, setSummary] = useState<ShiftSummary | null>(null);
-  const [actualCash, setActualCash] = useState<number>(0);
+  const [actualCashStr, setActualCashStr] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [isFetchingSummary, setIsFetchingSummary] = useState<boolean>(false);
   const [autoPrintZReport, setAutoPrintZReport] = useState<boolean>(true);
@@ -48,6 +48,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   useEffect(() => {
     if (isOpen && shift?.id) {
       loadSummary();
+      setActualCashStr('');
       setHasAcknowledgedDiff(false);
     }
   }, [isOpen, shift?.id]);
@@ -57,8 +58,6 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
     try {
       const sum = await shiftService.getShiftSummary(shift.id, clientId);
       setSummary(sum);
-      // Default actual cash to expected cash for convenient checking
-      setActualCash(sum.expected_cash || 0);
     } catch (err: any) {
       console.warn('Could not fetch shift live summary, using fallback:', err);
       setSummary({
@@ -78,20 +77,33 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
         expected_cash: shift.closing_cash_expected || shift.opening_cash,
         cash_difference: 0,
       });
-      setActualCash(shift.closing_cash_expected || shift.opening_cash);
     } finally {
       setIsFetchingSummary(false);
     }
   };
 
-  const expectedCash = summary?.expected_cash ?? (shift.closing_cash_expected || 0);
-  const difference = Number((actualCash - expectedCash).toFixed(2));
+  const expectedCash = summary?.expected_cash ?? (shift.closing_cash_expected || shift.opening_cash || 0);
+  const isActualEntered = actualCashStr.trim() !== '' && !isNaN(Number(actualCashStr)) && Number(actualCashStr) >= 0;
+  const numActualCash = isActualEntered ? Number(actualCashStr) : null;
+  const difference = numActualCash !== null ? Number((numActualCash - expectedCash).toFixed(2)) : 0;
+  const varianceStatus = numActualCash === null 
+    ? 'في انتظار إدخال النقدية الفعلية' 
+    : difference === 0 
+      ? 'مطابق' 
+      : difference < 0 
+        ? `عجز ${Math.abs(difference)} ${currencySymbol}` 
+        : `فائض ${difference} ${currencySymbol}`;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!clientId || !shift?.id) return;
 
-    if (actualCash < 0) {
+    if (!isActualEntered || numActualCash === null) {
+      toast.error('يرجى إدخال المبلغ النقدي الفعلي في الدرج قبل إغلاق الوردية');
+      return;
+    }
+
+    if (numActualCash < 0) {
       toast.error('المبلغ الفعلي لا يمكن أن يكون سالباً');
       return;
     }
@@ -105,7 +117,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
       const result = await closeShift({
         client_id: clientId,
         shift_id: shift.id,
-        closing_cash_actual: actualCash,
+        closing_cash_actual: numActualCash,
         closing_notes: notes.trim() || undefined,
       });
 
@@ -113,8 +125,8 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
         ...(summary || {}),
         shift_id: shift.id,
         shift_number: shift.shift_number,
-        closing_cash_actual: actualCash,
-        actual_cash: actualCash,
+        closing_cash_actual: numActualCash,
+        actual_cash: numActualCash,
         closing_cash_expected: expectedCash,
         expected_cash: expectedCash,
         cash_difference: difference,
@@ -138,11 +150,13 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
       onClose();
       if (onShiftClosed) {
         onShiftClosed({
+          ...shift,
           ...result,
           status: 'closed',
-          closing_cash_actual: actualCash,
+          closing_cash_actual: numActualCash,
           closing_cash_expected: expectedCash,
           cash_difference: difference,
+          closed_at: new Date().toISOString(),
         });
       }
     } catch (err: any) {
@@ -158,8 +172,8 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
         ...(summary || {}),
         shift_id: shift.id,
         shift_number: shift.shift_number,
-        closing_cash_actual: actualCash,
-        actual_cash: actualCash,
+        closing_cash_actual: numActualCash ?? expectedCash,
+        actual_cash: numActualCash ?? expectedCash,
         closing_cash_expected: expectedCash,
         expected_cash: expectedCash,
         cash_difference: difference,
@@ -288,86 +302,125 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
             </div>
           )}
 
-          {/* Expected Cash Banner */}
-          <div className="p-4 bg-slate-900 text-white rounded-xl flex items-center justify-between shadow-sm">
-            <div>
-              <span className="text-xs font-medium text-slate-300 block">النقد المتوقع في الدرج (Expected Cash)</span>
-              <span className="text-[11px] text-slate-400">
-                (افتتاح {summary?.opening_cash || shift.opening_cash} + كاش {summary?.total_cash_sales || 0} + إيداع {summary?.total_cash_in || 0} - سحب {summary?.total_cash_out || 0})
-              </span>
-            </div>
-            <div className="text-left">
-              <span className="font-mono text-xl font-black text-amber-400">
-                {expectedCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </span>
-              <span className="text-xs text-slate-300 mr-1.5 font-bold">{currencySymbol}</span>
-            </div>
-          </div>
-
           {/* Actual Cash Input */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-bold text-slate-900">
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                <DollarSign className="w-4 h-4 text-emerald-600" />
                 المبلغ النقدي الفعلي في الدرج (Actual Cash) <span className="text-rose-500">*</span>
               </label>
-              <span className="text-[11px] text-slate-500">قم بعد النقدية الفعلية وإدخالها هنا</span>
+              <span className="text-[11px] text-slate-500">قم بعد النقدية الفعلية بالدرج وإدخالها هنا</span>
             </div>
             <div className="relative">
-              <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-slate-400">
-                <DollarSign className="w-5 h-5" />
-              </div>
               <input
                 id="shift-closing-actual-cash"
                 type="number"
-                step="0.01"
+                step="any"
                 min="0"
-                value={actualCash}
-                onChange={(e) => setActualCash(parseFloat(e.target.value) || 0)}
-                className="w-full h-12 pr-11 pl-4 text-left font-mono text-xl font-black text-slate-900 bg-white border-2 border-slate-200 rounded-xl focus:border-emerald-600 focus:outline-none"
+                value={actualCashStr}
+                onChange={(e) => setActualCashStr(e.target.value)}
+                placeholder="أدخل النقدية الفعلية (مثال: 1500.00)"
+                className="w-full h-12 px-4 text-left font-mono text-xl font-black text-slate-900 bg-white border-2 border-slate-300 rounded-xl focus:border-emerald-600 focus:outline-none"
                 dir="ltr"
                 required
               />
             </div>
+            {!isActualEntered && (
+              <p className="text-[11px] text-amber-600 font-medium mt-1.5 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                يرجى إدخال المبلغ الفعلي المعدود لاحتساب الفارق ومطابقة الوردية (القيمة 0 مقبولة إن وجدت).
+              </p>
+            )}
           </div>
 
-          {/* Difference / Discrepancy Status Badge */}
+          {/* Explicit Variance Reconciliation Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* 1. الرصيد المتوقع */}
+            <div className="p-3.5 bg-slate-900 text-white rounded-xl shadow-xs">
+              <span className="text-xs font-medium text-slate-300 block">الرصيد المتوقع:</span>
+              <div className="font-mono text-lg font-black text-amber-400 mt-1">
+                {expectedCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {currencySymbol}
+              </div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                (افتتاح {summary?.opening_cash || shift.opening_cash} + كاش {summary?.total_cash_sales || 0} + إيداع {summary?.total_cash_in || 0} - سحب {summary?.total_cash_out || 0})
+              </span>
+            </div>
+
+            {/* 2. النقدية الفعلية */}
+            <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-xl">
+              <span className="text-xs font-bold text-slate-600 block">النقدية الفعلية:</span>
+              <div className="font-mono text-lg font-black text-slate-900 mt-1">
+                {numActualCash !== null 
+                  ? `${numActualCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currencySymbol}`
+                  : '---'}
+              </div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                المبلغ المعدود بالصندوق
+              </span>
+            </div>
+
+            {/* 3. الفرق */}
+            <div className={`p-3.5 border rounded-xl ${
+              numActualCash === null 
+                ? 'bg-slate-50 border-slate-200 text-slate-500' 
+                : difference === 0 
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
+                  : difference < 0 
+                    ? 'bg-rose-50 border-rose-200 text-rose-900' 
+                    : 'bg-blue-50 border-blue-200 text-blue-900'
+            }`}>
+              <span className="text-xs font-bold block">الفرق:</span>
+              <div className="font-mono text-lg font-black mt-1" dir="ltr">
+                {numActualCash !== null 
+                  ? `${difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} ${currencySymbol}`
+                  : '---'}
+              </div>
+              <span className="text-[10px] opacity-80 block mt-0.5">
+                (الفعلي - المتوقع)
+              </span>
+            </div>
+          </div>
+
+          {/* 4. الحالة الكلية البارزة */}
           <div className={`p-4 rounded-xl border flex items-center justify-between transition-colors ${
-            difference === 0
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+            numActualCash === null
+              ? 'bg-slate-50 border-slate-200 text-slate-600'
+              : difference === 0
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
               : difference < 0
-              ? 'bg-rose-50 border-rose-200 text-rose-900'
-              : 'bg-blue-50 border-blue-200 text-blue-900'
+              ? 'bg-rose-50 border-rose-300 text-rose-900'
+              : 'bg-blue-50 border-blue-300 text-blue-900'
           }`}>
             <div className="flex items-center gap-2.5">
-              {difference === 0 ? (
+              {numActualCash === null ? (
+                <AlertTriangle className="w-5 h-5 text-slate-400 shrink-0" />
+              ) : difference === 0 ? (
                 <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
               ) : (
                 <AlertTriangle className={`w-5 h-5 shrink-0 ${difference < 0 ? 'text-rose-600' : 'text-blue-600'}`} />
               )}
               <div>
-                <span className="text-xs font-bold block">
-                  {difference === 0
-                    ? 'مطابق تماماً (لا يوجد عجز أو زيادة)'
-                    : difference < 0
-                    ? `عجز في الصندوق بمقدار ${Math.abs(difference)} ${currencySymbol}`
-                    : `فائض / زيادة في الصندوق بمقدار ${difference} ${currencySymbol}`}
-                </span>
+                <span className="text-xs font-bold block">الحالة: {varianceStatus}</span>
                 <span className="text-[11px] opacity-80">
-                  {difference === 0
-                    ? 'النقدية الفعلية مطابقة تماماً للمبيعات والحركات المسجلة'
+                  {numActualCash === null
+                    ? 'في انتظار كتابة النقد الفعلي لتحديد حالة التطابق أو العجز أو الفائض'
+                    : difference === 0
+                    ? 'النقدية الفعلية مطابقة تماماً للحركات والمبيعات'
                     : difference < 0
                     ? 'المبلغ الفعلي أقل من المتوقع نظامياً، سيتم توثيق العجز في تقرير الوردية'
-                    : 'المبلغ الفعلي أكبر من المتوقع نظامياً، سيتم توثيق الزيادة في تقرير الوردية'}
+                    : 'المبلغ الفعلي أكبر من المتوقع نظامياً، سيتم توثيق الفائض في تقرير الوردية'}
                 </span>
               </div>
             </div>
-            <div className="font-mono text-base font-black text-left shrink-0">
-              {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} {currencySymbol}
-            </div>
+            {numActualCash !== null && (
+              <div className="font-mono text-base font-black shrink-0 px-3 py-1 bg-white/80 rounded-lg shadow-2xs">
+                {difference === 0 ? 'مطابق' : difference < 0 ? `عجز ${Math.abs(difference)}` : `فائض ${difference}`}
+              </div>
+            )}
           </div>
 
           {/* Cash Difference Acknowledgment Checkbox when discrepancy exists */}
-          {difference !== 0 && (
+          {numActualCash !== null && difference !== 0 && (
             <label className="flex items-start gap-3 p-3.5 bg-amber-50/80 border-2 border-amber-300 rounded-xl text-xs font-bold text-amber-950 cursor-pointer shadow-xs select-none">
               <input
                 id="shift-discrepancy-acknowledgment-checkbox"
@@ -377,7 +430,7 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
                 className="w-5 h-5 text-amber-600 rounded border-amber-400 focus:ring-amber-500 mt-0.5 shrink-0"
               />
               <span className="leading-relaxed">
-                أقر وأؤكد صحة النقدية الفعلية المدخلة ({actualCash.toFixed(2)} {currencySymbol})، ووجود فارق قدره{' '}
+                أقر وأؤكد صحة النقدية الفعلية المدخلة ({numActualCash.toFixed(2)} {currencySymbol})، ووجود فارق قدره{' '}
                 <span className="underline font-black">{Math.abs(difference).toFixed(2)} {currencySymbol}</span>{' '}
                 ({difference < 0 ? 'عجز في الدرج' : 'فائض في الدرج'})، والموافقة على توثيقه رسمياً في تقرير Z-Report وسجل المحاسبة.
               </span>

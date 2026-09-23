@@ -1169,7 +1169,7 @@ app.post('/api/devices/register', async (req, res) => {
       // Existing deactivated device: check quota before reactivating
       if (currentActive >= (license.max_devices || 1)) {
         return res.status(403).json({
-          error: `تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم (${license.max_devices} جهاز). يرجى ترقية الخطة أو تعطيل جهاز آخر أولاً.`,
+          error: 'تم الوصول إلى الحد الأقصى للأجهزة المسموح بها لهذا الترخيص. يرجى التواصل مع الإدارة لتفعيل هذا الجهاز.',
           error_code: 'MAX_DEVICES_REACHED',
           max_devices: license.max_devices,
           activated_devices: currentActive,
@@ -1207,7 +1207,7 @@ app.post('/api/devices/register', async (req, res) => {
     // New device: Check quota
     if (currentActive >= (license.max_devices || 1)) {
       return res.status(403).json({
-        error: `تم استنفاد الحد الأقصى للأجهزة المسموح بها في ترخيصكم (${license.max_devices} جهاز). يرجى ترقية الخطة أو تعطيل جهاز آخر أولاً.`,
+        error: 'تم الوصول إلى الحد الأقصى للأجهزة المسموح بها لهذا الترخيص. يرجى التواصل مع الإدارة لتفعيل هذا الجهاز.',
         error_code: 'MAX_DEVICES_REACHED',
         max_devices: license.max_devices,
         activated_devices: currentActive,
@@ -1343,11 +1343,32 @@ app.post('/api/devices/validate', async (req, res) => {
       .eq('device_fingerprint', deviceFingerprint)
       .maybeSingle();
 
+    // Count currently active devices under this license to enforce max_devices strictly
+    const { count: activeCount } = await supabaseAdmin
+      .from('devices')
+      .select('id', { count: 'exact', head: true })
+      .eq('license_id', license.id)
+      .eq('status', 'active');
+
+    const currentActive = activeCount || 0;
+
     if (devErr || !device) {
+      if (currentActive >= (license.max_devices || 1)) {
+        return res.status(200).json({
+          is_valid: false,
+          status: 'unregistered',
+          error_code: 'MAX_DEVICES_REACHED',
+          max_devices: license.max_devices,
+          activated_devices: currentActive,
+          message: 'تم الوصول إلى الحد الأقصى للأجهزة المسموح بها لهذا الترخيص. يرجى التواصل مع الإدارة لتفعيل هذا الجهاز.'
+        });
+      }
       return res.status(200).json({
         is_valid: false,
         status: 'unregistered',
         error_code: 'DEVICE_NOT_REGISTERED',
+        max_devices: license.max_devices,
+        activated_devices: currentActive,
         message: 'هذا الجهاز غير مسجل ضمن الأجهزة المصرح لها في المنشأة. يرجى تزويد إدارة النظام بالبصمة الرقمية لتسجيل الجهاز.'
       });
     }
@@ -1361,20 +1382,12 @@ app.post('/api/devices/validate', async (req, res) => {
       });
     }
 
-    // Count currently active devices under this license to enforce max_devices strictly
-    const { count: activeCount } = await supabaseAdmin
-      .from('devices')
-      .select('id', { count: 'exact', head: true })
-      .eq('license_id', license.id)
-      .eq('status', 'active');
-
-    const currentActive = activeCount || 0;
     if (license.max_devices && currentActive > license.max_devices) {
       return res.status(200).json({
         is_valid: false,
         status: 'exceeded',
-        error_code: 'MAX_DEVICES_EXCEEDED',
-        message: `تم تجاوز الحد الأقصى المسموح للأجهزة (${license.max_devices} أجهزة).`
+        error_code: 'MAX_DEVICES_REACHED',
+        message: 'تم الوصول إلى الحد الأقصى للأجهزة المسموح بها لهذا الترخيص. يرجى التواصل مع الإدارة لتفعيل هذا الجهاز.'
       });
     }
 
@@ -1911,15 +1924,21 @@ app.post('/api/shifts/close', async (req, res) => {
     // 4. Cash In & Cash Out movements
     const { data: drawerTxs } = await supabaseAdmin
       .from('cash_drawer_transactions')
-      .select('transaction_type, amount')
+      .select('transaction_type, amount, reason')
       .eq('shift_id', shiftId);
 
     let totalCashIn = 0;
     let totalCashOut = 0;
     for (const tx of (drawerTxs || [])) {
       const amt = Number(tx.amount || 0);
-      if (tx.transaction_type === 'cash_in') totalCashIn += amt;
-      else if (['cash_out', 'drop_to_safe'].includes(tx.transaction_type)) totalCashOut += amt;
+      if (tx.transaction_type === 'cash_in') {
+        // Exclude cash sales transactions to prevent double counting
+        if (!tx.reason?.includes('مبيعات نقدية')) {
+          totalCashIn += amt;
+        }
+      } else if (['cash_out', 'drop_to_safe'].includes(tx.transaction_type)) {
+        totalCashOut += amt;
+      }
     }
 
     // 5. Expected cash & difference reconciliation
@@ -2186,7 +2205,7 @@ app.post('/api/sales/complete', async (req, res) => {
     }
 
     // 1. Fetch products
-    const productIds = items.map((i: any) => i.product_id);
+    const productIds = items.map((i: any) => i.product_id || i.productId);
     const { data: productsData, error: prodErr } = await supabaseAdmin
       .from('products')
       .select('id, name, sku, barcode, selling_price, cost_price, tax_rate, track_stock, current_stock, is_active')
@@ -2216,12 +2235,14 @@ app.post('/api/sales/complete', async (req, res) => {
     const preparedItems: any[] = [];
 
     for (const item of items) {
-      const product = productsMap.get(item.product_id);
+      const product = productsMap.get(item.product_id || item.productId);
       if (!product) {
         return res.status(400).json({ error: 'صنف غير موجود بقاعدة البيانات' });
       }
-      const unitPrice = item.unit_price != null && item.unit_price >= 0 ? Number(item.unit_price) : Number(product.selling_price);
-      const lineDiscount = Math.min(Number(item.discount_amount || 0), item.quantity * unitPrice);
+      const unitPrice = item.unit_price != null && item.unit_price >= 0 
+        ? Number(item.unit_price) 
+        : (item.unitPrice != null && item.unitPrice >= 0 ? Number(item.unitPrice) : Number(product.selling_price));
+      const lineDiscount = Math.min(Number(item.discount_amount || item.discountAmount || 0), item.quantity * unitPrice);
       const taxableAmount = (item.quantity * unitPrice) - lineDiscount;
       const effectiveItemTaxRate = isTaxEnabled ? Number(product.tax_rate || 0) : 0;
       const itemTax = isTaxEnabled ? (Math.round(taxableAmount * (effectiveItemTaxRate / 100) * 10000) / 10000) : 0;
@@ -2319,7 +2340,7 @@ app.post('/api/sales/complete', async (req, res) => {
       client_id: clientId,
       payment_method: p.payment_method,
       amount: Number(p.amount),
-      reference_number: p.reference || null,
+      reference: p.reference || p.reference_number || null,
     }));
     await supabaseAdmin.from('sale_payments').insert(paymentsToInsert);
 
@@ -2351,17 +2372,19 @@ app.post('/api/sales/complete', async (req, res) => {
           });
         }
 
-        await supabaseAdmin.from('inventory_transactions').insert({
-          client_id: clientId,
-          warehouse_id: warehouseId,
-          product_id: item.product_id,
-          transaction_type: 'sale',
-          quantity: -item.quantity,
-          reference_id: saleId,
-          reference_type: 'sale',
-          notes: `فاتورة مبيعات ${invoiceNumber}`,
-          performed_by: createdBy,
-        }).catch(() => {});
+        try {
+          await supabaseAdmin.from('inventory_transactions').insert({
+            client_id: clientId,
+            warehouse_id: warehouseId,
+            product_id: item.product_id,
+            transaction_type: 'sale',
+            quantity: -item.quantity,
+            reference_id: saleId,
+            reference_type: 'sale',
+            notes: `فاتورة مبيعات ${invoiceNumber}`,
+            performed_by: createdBy,
+          });
+        } catch {}
       }
     }
 
@@ -2373,14 +2396,16 @@ app.post('/api/sales/complete', async (req, res) => {
       const actualCashAdded = Math.max(0, cashPaid - changeAmount);
 
       if (actualCashAdded > 0) {
-        await supabaseAdmin.from('cash_drawer_transactions').insert({
-          client_id: clientId,
-          shift_id: shiftId,
-          transaction_type: 'cash_in',
-          amount: actualCashAdded,
-          reason: `مبيعات نقدية فاتورة ${invoiceNumber}`,
-          performed_by: createdBy,
-        }).catch(() => {});
+        try {
+          await supabaseAdmin.from('cash_drawer_transactions').insert({
+            client_id: clientId,
+            shift_id: shiftId,
+            transaction_type: 'cash_in',
+            amount: actualCashAdded,
+            reason: `مبيعات نقدية فاتورة ${invoiceNumber}`,
+            performed_by: createdBy,
+          });
+        } catch {}
       }
     }
 
