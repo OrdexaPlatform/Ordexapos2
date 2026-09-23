@@ -24,7 +24,9 @@ import {
   Monitor,
   Settings,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useClientStore } from '../../store/clientStore';
@@ -38,6 +40,7 @@ import { InvoiceReceiptModal } from '../../components/client/InvoiceReceiptModal
 import { POSTerminalConfigModal } from '../../components/client/POSTerminalConfigModal';
 import { useBarcodeScanner } from '../../hooks/useBarcodeScanner';
 import { useCurrency } from '../../hooks/useCurrency';
+import { isBeepMuted, toggleBeepMuted } from '../../utils/audio';
 import { offlineStorage } from '../../lib/offline/offlineStorage';
 import { useShiftStore } from '../../store/shiftStore';
 import { useDeviceStore } from '../../store/deviceStore';
@@ -115,6 +118,16 @@ export const POSPage: React.FC = () => {
   const [itemPriceInputValue, setItemPriceInputValue] = useState<number>(0);
   const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isScannerSoundMuted, setIsScannerSoundMuted] = useState<boolean>(() => isBeepMuted());
+
+  const handleToggleSound = () => {
+    const nextMuted = toggleBeepMuted();
+    setIsScannerSoundMuted(nextMuted);
+    toast(nextMuted ? 'تم كتم صوت قارئ الباركود 🔇' : 'تم تفعيل صوت قارئ الباركود 🔔', {
+      duration: 1800,
+      icon: nextMuted ? '🔇' : '🔔'
+    });
+  };
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -707,6 +720,18 @@ export const POSPage: React.FC = () => {
           >
             <Monitor className="w-3.5 h-3.5 text-indigo-400" />
             <span className="hidden sm:inline">إعدادات الجهاز</span>
+          </button>
+
+          <button
+            onClick={handleToggleSound}
+            title={isScannerSoundMuted ? "تشغيل صوت قارئ الباركود (مكتوم)" : "كتم صوت قارئ الباركود"}
+            className={`p-1.5 rounded-lg transition-colors ${
+              isScannerSoundMuted 
+                ? 'text-rose-400 bg-rose-500/10 hover:bg-rose-500/20' 
+                : 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+            }`}
+          >
+            {isScannerSoundMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
           </button>
 
           <button

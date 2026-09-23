@@ -1270,6 +1270,134 @@ app.post('/api/devices/register', async (req, res) => {
 });
 
 // ==========================================
+// Strict POS Device Validation Endpoint
+// ==========================================
+app.post('/api/devices/validate', async (req, res) => {
+  try {
+    const { clientId, deviceFingerprint } = req.body;
+    if (!clientId || !deviceFingerprint) {
+      return res.status(400).json({ error: 'معرف المنشأة وبصمة الجهاز مطلوبة.' });
+    }
+
+    // Check client status
+    const { data: client, error: clientErr } = await supabaseAdmin
+      .from('clients')
+      .select('id, business_name, status')
+      .eq('id', clientId)
+      .maybeSingle();
+
+    if (clientErr || !client) {
+      return res.status(404).json({ error: 'تعذر العثور على المنشأة.' });
+    }
+
+    if (client.status !== 'active') {
+      return res.status(403).json({
+        is_valid: false,
+        status: 'deactivated',
+        error_code: 'CLIENT_INACTIVE',
+        message: 'حساب المنشأة موقوف أو غير نشط.'
+      });
+    }
+
+    // Fetch active license
+    const { data: license, error: licErr } = await supabaseAdmin
+      .from('licenses')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (licErr || !license) {
+      return res.status(403).json({
+        is_valid: false,
+        status: 'unregistered',
+        error_code: 'NO_LICENSE',
+        message: 'لا يوجد ترخيص مسجل لهذه المنشأة.'
+      });
+    }
+
+    if (license.status !== 'active') {
+      return res.status(403).json({
+        is_valid: false,
+        status: 'deactivated',
+        error_code: 'LICENSE_INACTIVE',
+        message: 'ترخيص المنشأة غير نشط أو موقوف.'
+      });
+    }
+
+    if (license.expiry_date && new Date(license.expiry_date) < new Date()) {
+      return res.status(403).json({
+        is_valid: false,
+        status: 'deactivated',
+        error_code: 'LICENSE_EXPIRED',
+        message: 'انتهت صلاحية ترخيص المنشأة.'
+      });
+    }
+
+    // Look for device in database
+    const { data: device, error: devErr } = await supabaseAdmin
+      .from('devices')
+      .select('*, license:licenses(*)')
+      .eq('client_id', clientId)
+      .eq('device_fingerprint', deviceFingerprint)
+      .maybeSingle();
+
+    if (devErr || !device) {
+      return res.status(200).json({
+        is_valid: false,
+        status: 'unregistered',
+        error_code: 'DEVICE_NOT_REGISTERED',
+        message: 'هذا الجهاز غير مسجل ضمن الأجهزة المصرح لها في المنشأة. يرجى تزويد إدارة النظام بالبصمة الرقمية لتسجيل الجهاز.'
+      });
+    }
+
+    if (device.status !== 'active') {
+      return res.status(200).json({
+        is_valid: false,
+        status: 'deactivated',
+        error_code: 'DEVICE_DEACTIVATED',
+        message: 'تم إيقاف هذا الجهاز من قبل إدارة النظام.'
+      });
+    }
+
+    // Count currently active devices under this license to enforce max_devices strictly
+    const { count: activeCount } = await supabaseAdmin
+      .from('devices')
+      .select('id', { count: 'exact', head: true })
+      .eq('license_id', license.id)
+      .eq('status', 'active');
+
+    const currentActive = activeCount || 0;
+    if (license.max_devices && currentActive > license.max_devices) {
+      return res.status(200).json({
+        is_valid: false,
+        status: 'exceeded',
+        error_code: 'MAX_DEVICES_EXCEEDED',
+        message: `تم تجاوز الحد الأقصى المسموح للأجهزة (${license.max_devices} أجهزة).`
+      });
+    }
+
+    // Update last_seen_at
+    await supabaseAdmin
+      .from('devices')
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq('id', device.id);
+
+    return res.json({
+      is_valid: true,
+      status: 'active',
+      device,
+      license,
+      message: 'الجهاز مصرح ونشط.'
+    });
+  } catch (err: any) {
+    console.error('Device validate error:', err);
+    return res.status(500).json({ error: err.message || 'خطأ في التحقق من الجهاز' });
+  }
+});
+
+// ==========================================
 // Client Profile & Settings Update
 // ==========================================
 app.post('/api/client/update', async (req, res) => {

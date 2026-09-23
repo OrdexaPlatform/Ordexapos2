@@ -81,17 +81,7 @@ export const InstallPwaButton: React.FC<InstallPwaButtonProps> = ({
     }
   };
 
-  // If already running as installed PWA or native, render a small active badge in header
-  if (isStandalone && variant === 'header') {
-    return (
-      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg text-xs">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">نسخة مثبتة (أوفلاين)</span>
-      </div>
-    );
-  }
-
-  // If already installed or dismissed, completely hide the hero banner and compact prompts
+  // If already running as installed PWA, standalone, or native, completely hide PWA Install UI
   if (isStandalone || isDismissed) {
     return null;
   }

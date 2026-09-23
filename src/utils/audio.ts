@@ -3,6 +3,8 @@
  * Generates an authentic supermarket barcode scanner "beep" (تيت) using Web Audio API
  */
 
+const SCANNER_BEEP_MUTE_KEY = 'ordexa_scanner_beep_muted';
+
 let audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext | null {
@@ -20,9 +22,38 @@ function getAudioContext(): AudioContext | null {
 }
 
 /**
+ * Checks if POS scanner sound is currently muted
+ */
+export function isBeepMuted(): boolean {
+  if (typeof localStorage === 'undefined') return false;
+  return localStorage.getItem(SCANNER_BEEP_MUTE_KEY) === 'true';
+}
+
+/**
+ * Sets POS scanner sound mute state
+ */
+export function setBeepMuted(muted: boolean): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(SCANNER_BEEP_MUTE_KEY, muted ? 'true' : 'false');
+  }
+}
+
+/**
+ * Toggles POS scanner sound mute state and returns the new state
+ */
+export function toggleBeepMuted(): boolean {
+  const current = isBeepMuted();
+  const next = !current;
+  setBeepMuted(next);
+  return next;
+}
+
+/**
  * Plays a crisp barcode scanner confirmation beep (similar to Carrefour / retail scanners)
  */
 export function playScannerBeep() {
+  if (isBeepMuted()) return;
+
   try {
     const ctx = getAudioContext();
     if (!ctx) return;

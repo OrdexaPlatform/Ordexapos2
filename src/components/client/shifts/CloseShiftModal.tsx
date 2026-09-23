@@ -43,10 +43,12 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   const [isFetchingSummary, setIsFetchingSummary] = useState<boolean>(false);
   const [autoPrintZReport, setAutoPrintZReport] = useState<boolean>(true);
   const [isPrintingZReport, setIsPrintingZReport] = useState<boolean>(false);
+  const [hasAcknowledgedDiff, setHasAcknowledgedDiff] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen && shift?.id) {
       loadSummary();
+      setHasAcknowledgedDiff(false);
     }
   }, [isOpen, shift?.id]);
 
@@ -94,6 +96,11 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
       return;
     }
 
+    if (difference !== 0 && !hasAcknowledgedDiff) {
+      toast.error(`يرجى تأكيد الإقرار بوجود فارق بالدرج (${Math.abs(difference)} ${currencySymbol}) قبل إغلاق الوردية.`);
+      return;
+    }
+
     try {
       const result = await closeShift({
         client_id: clientId,
@@ -102,9 +109,22 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
         closing_notes: notes.trim() || undefined,
       });
 
-      if (autoPrintZReport && summary) {
+      const finalReportSummary: any = {
+        ...(summary || {}),
+        shift_id: shift.id,
+        shift_number: shift.shift_number,
+        closing_cash_actual: actualCash,
+        actual_cash: actualCash,
+        closing_cash_expected: expectedCash,
+        expected_cash: expectedCash,
+        cash_difference: difference,
+        status: 'closed',
+        closed_at: new Date().toISOString()
+      };
+
+      if (autoPrintZReport) {
         try {
-          await POSPrintManager.printZReport(summary, {
+          await POSPrintManager.printZReport(finalReportSummary, {
             businessName: 'Ordexa POS',
             cashierName: clientUser?.name || 'الكاشير',
             closedAt: new Date().toISOString()
@@ -117,7 +137,13 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
       toast.success('تم إغلاق الوردية وتوثيق تسوية الصندوق بنجاح!');
       onClose();
       if (onShiftClosed) {
-        onShiftClosed(result);
+        onShiftClosed({
+          ...result,
+          status: 'closed',
+          closing_cash_actual: actualCash,
+          closing_cash_expected: expectedCash,
+          cash_difference: difference,
+        });
       }
     } catch (err: any) {
       toast.error(err.message || 'فشل إغلاق الوردية');
@@ -125,10 +151,23 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
   };
 
   const handleManualPrintZReport = async () => {
-    if (!summary) return;
+    if (!shift) return;
     setIsPrintingZReport(true);
     try {
-      const res = await POSPrintManager.printZReport(summary, {
+      const finalReportSummary: any = {
+        ...(summary || {}),
+        shift_id: shift.id,
+        shift_number: shift.shift_number,
+        closing_cash_actual: actualCash,
+        actual_cash: actualCash,
+        closing_cash_expected: expectedCash,
+        expected_cash: expectedCash,
+        cash_difference: difference,
+        status: 'closed',
+        closed_at: new Date().toISOString()
+      };
+
+      const res = await POSPrintManager.printZReport(finalReportSummary, {
         businessName: 'Ordexa POS',
         cashierName: clientUser?.name || 'الكاشير',
         closedAt: new Date().toISOString()
@@ -326,6 +365,24 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
               {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} {currencySymbol}
             </div>
           </div>
+
+          {/* Cash Difference Acknowledgment Checkbox when discrepancy exists */}
+          {difference !== 0 && (
+            <label className="flex items-start gap-3 p-3.5 bg-amber-50/80 border-2 border-amber-300 rounded-xl text-xs font-bold text-amber-950 cursor-pointer shadow-xs select-none">
+              <input
+                id="shift-discrepancy-acknowledgment-checkbox"
+                type="checkbox"
+                checked={hasAcknowledgedDiff}
+                onChange={(e) => setHasAcknowledgedDiff(e.target.checked)}
+                className="w-5 h-5 text-amber-600 rounded border-amber-400 focus:ring-amber-500 mt-0.5 shrink-0"
+              />
+              <span className="leading-relaxed">
+                أقر وأؤكد صحة النقدية الفعلية المدخلة ({actualCash.toFixed(2)} {currencySymbol})، ووجود فارق قدره{' '}
+                <span className="underline font-black">{Math.abs(difference).toFixed(2)} {currencySymbol}</span>{' '}
+                ({difference < 0 ? 'عجز في الدرج' : 'فائض في الدرج'})، والموافقة على توثيقه رسمياً في تقرير Z-Report وسجل المحاسبة.
+              </span>
+            </label>
+          )}
 
           {/* Closing Notes */}
           <div>

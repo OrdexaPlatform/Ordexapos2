@@ -292,15 +292,15 @@ export class POSPrintManager {
 
           <div class="row bold" style="font-size: 1.1em;">
             <span>النقد المتوقع في الدرج:</span>
-            <span class="font-mono">${formatCurrency(s.expected_cash || 0)}</span>
+            <span class="font-mono">${formatCurrency(s.expected_cash || s.closing_cash_expected || 0)}</span>
           </div>
           <div class="row bold" style="font-size: 1.1em;">
             <span>النقد الفعلي المسجل:</span>
-            <span class="font-mono">${formatCurrency(s.closing_cash_actual || s.actual_cash || 0)}</span>
+            <span class="font-mono">${formatCurrency(s.closing_cash_actual ?? s.actual_cash ?? 0)}</span>
           </div>
-          <div class="row bold">
-            <span>الفارق (العجز / الزيادة):</span>
-            <span class="font-mono">${formatCurrency(s.cash_difference || 0)}</span>
+          <div class="row bold" style="color: ${Number(s.cash_difference ?? 0) === 0 ? '#059669' : Number(s.cash_difference ?? 0) < 0 ? '#dc2626' : '#2563eb'};">
+            <span>الفارق (${Number(s.cash_difference ?? 0) === 0 ? 'مطابق' : Number(s.cash_difference ?? 0) < 0 ? 'عجز' : 'فائض'}):</span>
+            <span class="font-mono">${Number(s.cash_difference ?? 0) === 0 ? '0.00 (مطابق تماماً)' : Number(s.cash_difference ?? 0) > 0 ? `+${formatCurrency(Number(s.cash_difference))} (فائض في الدرج)` : `${formatCurrency(Number(s.cash_difference))} (عجز في الدرج)`}</span>
           </div>
 
           <div class="divider"></div>

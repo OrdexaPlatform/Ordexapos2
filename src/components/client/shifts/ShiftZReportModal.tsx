@@ -177,18 +177,18 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
                 <span className="font-mono">{shift.closing_cash_expected.toFixed(2)} {currencySymbol}</span>
               </div>
 
-              {isClosed && shift.closing_cash_actual !== null && shift.closing_cash_actual !== undefined && (
+              {(isClosed || (shift.closing_cash_actual !== null && shift.closing_cash_actual !== undefined)) && (
                 <>
                   <div className="flex justify-between font-black text-slate-900 pt-1">
                     <span>النقد الفعلي المعدود:</span>
-                    <span className="font-mono">{shift.closing_cash_actual.toFixed(2)} {currencySymbol}</span>
+                    <span className="font-mono">{Number(shift.closing_cash_actual || 0).toFixed(2)} {currencySymbol}</span>
                   </div>
                   <div className={`flex justify-between font-black p-2 rounded-lg mt-1 ${
                     difference === 0 ? 'bg-emerald-50 text-emerald-800' : difference < 0 ? 'bg-rose-50 text-rose-800' : 'bg-blue-50 text-blue-800'
                   }`}>
                     <span>فارق الصندوق:</span>
-                    <span className="font-mono">
-                      {difference === 0 ? '0.00 (مطابق)' : difference > 0 ? `+${difference.toFixed(2)} (فائض)` : `${difference.toFixed(2)} (عجز)`}
+                    <span className="font-mono font-black" dir="ltr">
+                      {difference === 0 ? '0.00 (مطابق تماماً)' : difference > 0 ? `+${difference.toFixed(2)} (فائض في الدرج)` : `${difference.toFixed(2)} (عجز في الدرج)`}
                     </span>
                   </div>
                 </>

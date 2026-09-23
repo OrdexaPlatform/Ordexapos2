@@ -41,6 +41,7 @@ export const POSShiftBar: React.FC<POSShiftBarProps> = ({
   const [isCloseModalOpen, setIsCloseModalOpen] = useState<boolean>(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState<boolean>(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState<boolean>(false);
+  const [reportShift, setReportShift] = useState<Shift | null>(null);
   const [isTerminalModalOpen, setIsTerminalModalOpen] = useState<boolean>(false);
 
   const { device, isActivated, fingerprint, status: deviceStatus, licenseValidation } = useDeviceStore();
@@ -267,9 +268,23 @@ export const POSShiftBar: React.FC<POSShiftBarProps> = ({
               if (onRefresh) onRefresh();
             }}
             shift={activeShift}
-            onShiftClosed={(res) => {
-              if (onRefresh) onRefresh();
+            onShiftClosed={(res: any) => {
+              const closedShiftObj: Shift = {
+                ...activeShift,
+                status: 'closed',
+                closing_cash_actual: res.closing_cash_actual,
+                closing_cash_expected: res.closing_cash_expected,
+                cash_difference: res.cash_difference,
+                closed_at: new Date().toISOString(),
+                total_sales_amount: res.total_sales_amount ?? activeShift.total_sales_amount,
+                total_cash_sales: res.total_cash_sales ?? activeShift.total_cash_sales,
+                total_card_sales: res.total_card_sales ?? activeShift.total_card_sales,
+                total_refunds_amount: res.total_refunds_amount ?? activeShift.total_refunds_amount,
+                orders_count: res.orders_count ?? activeShift.orders_count,
+              };
+              setReportShift(closedShiftObj);
               setIsReportModalOpen(true);
+              if (onRefresh) onRefresh();
             }}
           />
 
@@ -281,13 +296,18 @@ export const POSShiftBar: React.FC<POSShiftBarProps> = ({
             }}
             shift={activeShift}
           />
-
-          <ShiftZReportModal
-            isOpen={isReportModalOpen}
-            onClose={() => setIsReportModalOpen(false)}
-            shift={activeShift}
-          />
         </>
+      )}
+
+      {(reportShift || activeShift) && (
+        <ShiftZReportModal
+          isOpen={isReportModalOpen}
+          onClose={() => {
+            setIsReportModalOpen(false);
+            setReportShift(null);
+          }}
+          shift={reportShift || activeShift!}
+        />
       )}
     </>
   );

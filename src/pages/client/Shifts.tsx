@@ -519,9 +519,23 @@ export const ShiftsPage: React.FC = () => {
             loadData();
           }}
           shift={selectedShiftForClose}
-          onShiftClosed={(res) => {
+          onShiftClosed={(res: any) => {
             loadData();
-            setSelectedShiftForReport(selectedShiftForClose);
+            const closedShiftObj: Shift = {
+              ...selectedShiftForClose,
+              status: 'closed',
+              closing_cash_actual: res.closing_cash_actual,
+              closing_cash_expected: res.closing_cash_expected,
+              cash_difference: res.cash_difference,
+              closed_at: new Date().toISOString(),
+              total_sales_amount: res.total_sales_amount ?? selectedShiftForClose.total_sales_amount,
+              total_cash_sales: res.total_cash_sales ?? selectedShiftForClose.total_cash_sales,
+              total_card_sales: res.total_card_sales ?? selectedShiftForClose.total_card_sales,
+              total_refunds_amount: res.total_refunds_amount ?? selectedShiftForClose.total_refunds_amount,
+              orders_count: res.orders_count ?? selectedShiftForClose.orders_count,
+            };
+            setSelectedShiftForReport(closedShiftObj);
+            setSelectedShiftForClose(null);
           }}
         />
       )}

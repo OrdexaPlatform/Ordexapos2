@@ -205,6 +205,10 @@ export const usePOSCartStore = create<POSCartState>((set, get) => ({
       line_total: lineTotal
     };
 
+    if (quantity > item.quantity) {
+      playScannerBeep();
+    }
+
     set({ items: updatedItems });
     return { success: true };
   },

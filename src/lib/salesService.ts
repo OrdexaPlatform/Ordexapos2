@@ -989,7 +989,7 @@ export async function fetchSales(
     .select(`
       *,
       warehouse:warehouses(id, name, code),
-      cashier:client_users!sales_created_by_fkey(id, full_name, role, email),
+      cashier:client_users!sales_created_by_fkey(id, name, role, email),
       items:sale_items(id, product_name_snapshot, sku_snapshot, quantity, unit_price, line_total),
       payments:sale_payments(id, payment_method, amount, reference)
     `, { count: 'exact' })
@@ -1085,7 +1085,7 @@ export async function fetchSaleDetails(saleId: string, clientId: string): Promis
     .select(`
       *,
       warehouse:warehouses(id, name, code, address),
-      cashier:client_users!sales_created_by_fkey(id, full_name, email, role),
+      cashier:client_users!sales_created_by_fkey(id, name, email, role),
       items:sale_items(
         id,
         product_id,

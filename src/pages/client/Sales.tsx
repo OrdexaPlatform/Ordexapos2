@@ -174,7 +174,7 @@ export const SalesPage: React.FC = () => {
     const rows = sales.map(s => [
       s.invoice_number,
       new Date(s.sale_date).toLocaleString('ar-SA'),
-      s.cashier?.full_name || '',
+      s.cashier?.name || (s.cashier as any)?.full_name || 'كاشير عام',
       s.warehouse?.name || '',
       s.subtotal,
       s.discount_amount,
@@ -473,14 +473,15 @@ export const SalesPage: React.FC = () => {
                           <Eye className="w-4 h-4" />
                         </button>
 
-                        {/* Print Receipt */}
+                        {/* Print / Reprint Receipt */}
                         <PermissionGuard permission="sales.print">
                           <button
                             onClick={() => handleOpenPrint(s)}
-                            title="طباعة الفاتورة"
-                            className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                            title="إعادة طباعة الفاتورة (Reprint)"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-lg transition-colors"
                           >
-                            <Printer className="w-4 h-4" />
+                            <Printer className="w-3.5 h-3.5 text-slate-600" />
+                            <span>إعادة طباعة</span>
                           </button>
                         </PermissionGuard>
 

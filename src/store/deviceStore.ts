@@ -449,13 +449,12 @@ export const useDeviceStore = create<DeviceState>((set, get) => ({
       }
 
       if (!data) {
-        // If offline with valid grace or auth snapshot, don't show unregistered error
-        if (clientId) {
+        // Only if offline with valid grace or auth snapshot, allow offline grace
+        if (clientId && typeof navigator !== 'undefined' && !navigator.onLine) {
           const authSnap = await offlineStorage.verifyAuthSnapshot(clientId, currentFp);
           const graceCheck = await offlineStorage.verifyOfflineLicense(clientId, currentFp);
-          const isRegisteredLocally = typeof localStorage !== 'undefined' && localStorage.getItem(`ordexa_device_registered_${clientId}`);
 
-          if (authSnap.valid || graceCheck.permitted || isRegisteredLocally) {
+          if (authSnap.valid || graceCheck.permitted) {
             let cachedDev: any = null;
             try {
               const rawDev = localStorage.getItem(`ordexa_device_${clientId}`);
