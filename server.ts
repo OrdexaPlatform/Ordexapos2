@@ -1941,9 +1941,40 @@ app.post('/api/shifts/close', async (req, res) => {
       }
     }
 
-    // 5. Expected cash & difference reconciliation
-    const openingCash = Number(shift.opening_cash || 0);
-    const expectedCash = Math.max(0, openingCash + totalCashSales + totalCashIn - totalCashOut);
+    // 5. Authoritative Expected cash & difference reconciliation
+    let expectedCash = 0;
+    let finalTotalSales = totalSalesAmount;
+    let finalCashSales = totalCashSales;
+    let finalCardSales = totalCardSales;
+    let finalOtherSales = totalOtherSales;
+    let finalCashIn = totalCashIn;
+    let finalCashOut = totalCashOut;
+    let finalOrdersCount = ordersCount;
+
+    try {
+      const { data: rpcSummary } = await supabaseAdmin.rpc('get_shift_summary', {
+        p_shift_id: shiftId,
+        p_client_id: clientId,
+      });
+
+      if (rpcSummary) {
+        expectedCash = Number(rpcSummary.expected_cash ?? 0);
+        if (rpcSummary.total_sales_amount != null) finalTotalSales = Number(rpcSummary.total_sales_amount);
+        if (rpcSummary.total_cash_sales != null) finalCashSales = Number(rpcSummary.total_cash_sales);
+        if (rpcSummary.total_card_sales != null) finalCardSales = Number(rpcSummary.total_card_sales);
+        if (rpcSummary.total_other_sales != null) finalOtherSales = Number(rpcSummary.total_other_sales);
+        if (rpcSummary.total_cash_in != null) finalCashIn = Number(rpcSummary.total_cash_in);
+        if (rpcSummary.total_cash_out != null) finalCashOut = Number(rpcSummary.total_cash_out);
+        if (rpcSummary.orders_count != null) finalOrdersCount = Number(rpcSummary.orders_count);
+      } else {
+        const openingCash = Number(shift.opening_cash || 0);
+        expectedCash = Math.max(0, openingCash + totalCashSales + totalCashIn - totalCashOut);
+      }
+    } catch {
+      const openingCash = Number(shift.opening_cash || 0);
+      expectedCash = Math.max(0, openingCash + totalCashSales + totalCashIn - totalCashOut);
+    }
+
     const actualCash = Number(closingCashActual);
     const cashDifference = actualCash - expectedCash;
 
@@ -1971,14 +2002,14 @@ app.post('/api/shifts/close', async (req, res) => {
         closing_cash_actual: actualCash,
         closing_cash_expected: expectedCash,
         cash_difference: cashDifference,
-        total_sales_amount: totalSalesAmount,
-        total_cash_sales: totalCashSales,
-        total_card_sales: totalCardSales,
-        total_other_sales: totalOtherSales,
+        total_sales_amount: finalTotalSales,
+        total_cash_sales: finalCashSales,
+        total_card_sales: finalCardSales,
+        total_other_sales: finalOtherSales,
         total_refunds_amount: totalRefundsAmount,
-        total_cash_in: totalCashIn,
-        total_cash_out: totalCashOut,
-        orders_count: ordersCount,
+        total_cash_in: finalCashIn,
+        total_cash_out: finalCashOut,
+        orders_count: finalOrdersCount,
         closing_notes: closingNotes ? String(closingNotes).trim() : null,
         updated_at: new Date().toISOString(),
       })
@@ -2286,6 +2317,30 @@ app.post('/api/sales/complete', async (req, res) => {
     const nextSeq = (count || 0) + 1;
     const invoiceNumber = `INV-${String(nextSeq).padStart(6, '0')}`;
 
+    // Resolve created_by client user id
+    let effectiveCreatedBy = createdBy;
+    if (createdBy) {
+      const { data: cu } = await supabaseAdmin
+        .from('client_users')
+        .select('id')
+        .eq('client_id', clientId)
+        .or(`id.eq.${createdBy},auth_user_id.eq.${createdBy}`)
+        .maybeSingle();
+      if (cu) {
+        effectiveCreatedBy = cu.id;
+      }
+    }
+    if (!effectiveCreatedBy && shiftId) {
+      const { data: sh } = await supabaseAdmin
+        .from('shifts')
+        .select('opened_by')
+        .eq('id', shiftId)
+        .maybeSingle();
+      if (sh?.opened_by) {
+        effectiveCreatedBy = sh.opened_by;
+      }
+    }
+
     // 3. Insert Sale
     const { data: saleData, error: saleErr } = await supabaseAdmin
       .from('sales')
@@ -2305,7 +2360,7 @@ app.post('/api/sales/complete', async (req, res) => {
         payment_status: paymentStatus,
         sale_status: 'completed',
         notes,
-        created_by: createdBy,
+        created_by: effectiveCreatedBy,
       })
       .select('id, invoice_number, total_amount, sale_date')
       .single();

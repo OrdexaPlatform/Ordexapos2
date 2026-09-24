@@ -1062,8 +1062,13 @@ export async function fetchSales(
     }
   }
 
+  const mappedSales = ((data as any[]) || []).map((s: any) => ({
+    ...s,
+    cashier: s.cashier || (s.shift?.opened_by_user ? s.shift.opened_by_user : null) || { name: 'الكاشير' }
+  }));
+
   return {
-    sales: (data as Sale[]) || [],
+    sales: mappedSales as Sale[],
     totalCount: count || 0,
     stats: {
       totalSalesAmount,

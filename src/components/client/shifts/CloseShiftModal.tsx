@@ -118,6 +118,10 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
         client_id: clientId,
         shift_id: shift.id,
         closing_cash_actual: numActualCash,
+        closing_cash_expected: expectedCash,
+        cash_difference: difference,
+        closed_by: clientUser?.id,
+        user_id: clientUser?.id,
         closing_notes: notes.trim() || undefined,
       });
 

@@ -385,10 +385,10 @@ export const ShiftsPage: React.FC = () => {
                           <span className="text-[10px] text-slate-400 font-normal">فتح:</span>
                           <span>{s.cashier_name || 'الكاشير'}</span>
                         </div>
-                        {s.closed_by_name && (
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                        {isClosed && (
+                          <div className="text-[11px] text-slate-600 flex items-center gap-1 mt-0.5">
                             <span className="text-[10px] text-slate-400 font-normal">إغلاق:</span>
-                            <span>{s.closed_by_name}</span>
+                            <span className="font-medium text-slate-700">{s.closed_by_name || s.cashier_name || 'الكاشير'}</span>
                           </div>
                         )}
                       </td>
@@ -417,7 +417,7 @@ export const ShiftsPage: React.FC = () => {
 
                       {/* Expected Cash */}
                       <td className="py-3.5 px-4 font-mono text-slate-700 font-semibold">
-                        {(s.closing_cash_expected || s.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        {(s.closing_cash_expected !== null && s.closing_cash_expected !== undefined ? s.closing_cash_expected : s.opening_cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </td>
 
                       {/* Actual Cash */}
@@ -430,14 +430,18 @@ export const ShiftsPage: React.FC = () => {
                       {/* Difference */}
                       <td className="py-3.5 px-4 font-mono">
                         {isClosed ? (
-                          <span className={`font-bold px-2 py-0.5 rounded ${
-                            diff === 0 
-                              ? 'bg-emerald-50 text-emerald-700' 
+                          <span className={`inline-flex items-center gap-1 font-bold px-2.5 py-1 rounded-lg text-xs ${
+                            Math.abs(diff) < 0.01 
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                               : diff < 0 
-                              ? 'bg-rose-50 text-rose-700' 
-                              : 'bg-blue-50 text-blue-700'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200' 
+                              : 'bg-blue-50 text-blue-700 border border-blue-200'
                           }`}>
-                            {diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2)}
+                            {Math.abs(diff) < 0.01 
+                              ? 'مطابق (0.00)' 
+                              : diff < 0 
+                              ? `عجز (${Math.abs(diff).toLocaleString('en-US', { minimumFractionDigits: 2 })})` 
+                              : `فائض (+${diff.toLocaleString('en-US', { minimumFractionDigits: 2 })})`}
                           </span>
                         ) : (
                           <span className="text-slate-400 font-sans text-[11px]">—</span>

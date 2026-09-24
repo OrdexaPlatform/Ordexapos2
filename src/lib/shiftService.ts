@@ -491,14 +491,21 @@ export const shiftService = {
 
     // 1. Primary: Server atomic reconciliation
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (sessionData?.session?.access_token) {
+        headers['Authorization'] = `Bearer ${sessionData.session.access_token}`;
+      }
+
       const res = await fetch('/api/shifts/close', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           clientId: payload.client_id,
           shiftId: payload.shift_id,
           closingCashActual: payload.closing_cash_actual,
           closingNotes: payload.closing_notes || null,
+          userId: payload.closed_by || (payload as any).user_id || (payload as any).userId || null,
         }),
       });
 
@@ -522,33 +529,68 @@ export const shiftService = {
       console.warn('Server shift close failed, trying fallback...', apiErr);
     }
 
-    // 2. Direct fallback
+    // 2. Direct fallback with full reconciliation
+    let summary: any = null;
+    try {
+      summary = await this.getShiftSummary(payload.shift_id, payload.client_id);
+    } catch (sumErr) {
+      console.warn('Could not fetch shift summary for closure:', sumErr);
+    }
+
+    const actualCash = Number(payload.closing_cash_actual || 0);
+    const expectedCash = summary ? Number(summary.expected_cash || 0) : 0;
+    const diff = actualCash - expectedCash;
+    const closedByUserId = payload.closed_by || (payload as any).user_id || null;
+
+    const updatePayload: Record<string, any> = {
+      status: 'closed',
+      closed_at: new Date().toISOString(),
+      closing_cash_actual: actualCash,
+      closing_cash_expected: expectedCash,
+      cash_difference: diff,
+      closing_notes: payload.closing_notes ? String(payload.closing_notes).trim() : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (closedByUserId) {
+      updatePayload.closed_by = closedByUserId;
+    }
+
+    if (summary) {
+      updatePayload.total_sales_amount = Number(summary.total_sales_amount || 0);
+      updatePayload.total_cash_sales = Number(summary.total_cash_sales || 0);
+      updatePayload.total_card_sales = Number(summary.total_card_sales || 0);
+      updatePayload.total_other_sales = Number(summary.total_other_sales || 0);
+      updatePayload.total_refunds_amount = Number(summary.total_refunds_amount || 0);
+      updatePayload.total_cash_in = Number(summary.total_cash_in || 0);
+      updatePayload.total_cash_out = Number(summary.total_cash_out || 0);
+      updatePayload.orders_count = Number(summary.orders_count || 0);
+    }
+
     const { data: updatedShift, error: updateErr } = await supabase
       .from('shifts')
-      .update({
-        status: 'closed',
-        closed_at: new Date().toISOString(),
-        closing_cash_actual: payload.closing_cash_actual,
-        closing_notes: payload.closing_notes || null,
-      })
+      .update(updatePayload)
       .eq('id', payload.shift_id)
       .select()
       .single();
 
     if (updateErr) throw new Error(updateErr.message || 'فشل إغلاق الوردية');
 
+    offlineStorage.saveCurrentShift(payload.client_id, null).catch(() => {});
+    try { localStorage.removeItem(`ordexa_active_shift_${payload.client_id}`); } catch {}
+
     return {
       success: true,
       shift_id: updatedShift.id,
       shift_number: updatedShift.shift_number,
-      closing_cash_actual: Number(payload.closing_cash_actual),
-      closing_cash_expected: Number(updatedShift.closing_cash_expected || 0),
-      cash_difference: Number(updatedShift.cash_difference || 0),
-      total_sales_amount: Number(updatedShift.total_sales_amount || 0),
-      total_cash_sales: Number(updatedShift.total_cash_sales || 0),
-      total_card_sales: Number(updatedShift.total_card_sales || 0),
-      total_refunds_amount: Number(updatedShift.total_refunds_amount || 0),
-      orders_count: Number(updatedShift.orders_count || 0),
+      closing_cash_actual: actualCash,
+      closing_cash_expected: expectedCash,
+      cash_difference: diff,
+      total_sales_amount: Number(updatedShift.total_sales_amount || summary?.total_sales_amount || 0),
+      total_cash_sales: Number(updatedShift.total_cash_sales || summary?.total_cash_sales || 0),
+      total_card_sales: Number(updatedShift.total_card_sales || summary?.total_card_sales || 0),
+      total_refunds_amount: Number(updatedShift.total_refunds_amount || summary?.total_refunds_amount || 0),
+      orders_count: Number(updatedShift.orders_count || summary?.orders_count || 0),
     };
   },
 
@@ -777,13 +819,17 @@ export const shiftService = {
     const { data, error } = await query;
     if (error) throw error;
 
-    return (data || []).map((item) => ({
-      ...item,
-      cashier_name: (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير',
-      closed_by_name: (item.closed_by_user as any)?.name || (item.closed_by_user as any)?.full_name || null,
-      register_name: item.register?.name || 'الصندوق الرئيسي',
-      warehouse_name: item.warehouse?.name || 'المستودع',
-    }));
+    return (data || []).map((item) => {
+      const openerName = (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير';
+      const closerName = (item.closed_by_user as any)?.name || (item.closed_by_user as any)?.full_name || (item.status === 'closed' ? openerName : null);
+      return {
+        ...item,
+        cashier_name: openerName,
+        closed_by_name: closerName,
+        register_name: item.register?.name || 'الصندوق الرئيسي',
+        warehouse_name: item.warehouse?.name || 'المستودع',
+      };
+    });
   },
 
   /**

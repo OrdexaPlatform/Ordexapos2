@@ -574,6 +574,10 @@ export interface CloseShiftPayload {
   client_id: string;
   shift_id: string;
   closing_cash_actual: number;
+  closing_cash_expected?: number;
+  cash_difference?: number;
+  closed_by?: string;
+  user_id?: string;
   closing_notes?: string;
 }
 

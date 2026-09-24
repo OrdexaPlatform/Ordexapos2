@@ -49,9 +49,12 @@ import {
   Percent,
   Check,
   Building2,
-  DollarSign
+  DollarSign,
+  Printer
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { BarcodeView, generateBarcodeNumber } from '../../components/common/BarcodeView';
+import { BarcodeLabelModal } from '../../components/client/products/BarcodeLabelModal';
 
 export function ProductsPage() {
   const { client } = useClientStore();
@@ -84,6 +87,8 @@ export function ProductsPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
+  const [selectedProductForBarcode, setSelectedProductForBarcode] = useState<Product | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -164,10 +169,10 @@ export function ProductsPage() {
     setFormState(prev => ({ ...prev, sku: `SKU-${random}` }));
   };
 
-  // Generate random Barcode helper (EAN-13 style random)
+  // Generate random Barcode helper (Valid EAN-13 with checksum)
   const handleGenerateRandomBarcode = () => {
-    const rand = Math.floor(100000000000 + Math.random() * 900000000000);
-    setFormState(prev => ({ ...prev, barcode: `628${rand}`.slice(0, 13) }));
+    const validBarcode = generateBarcodeNumber('EAN13');
+    setFormState(prev => ({ ...prev, barcode: validBarcode }));
   };
 
   const openAddModal = () => {
@@ -632,6 +637,19 @@ export function ProductsPage() {
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center justify-center gap-1">
+                          {/* Print Barcode Label */}
+                          <button
+                            id={`btn-barcode-label-${p.id}`}
+                            onClick={() => {
+                              setSelectedProductForBarcode(p);
+                              setIsBarcodeModalOpen(true);
+                            }}
+                            title="طباعة ملصق الباركود (Barcode Label)"
+                            className="p-1.5 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors border border-slate-200 shadow-2xs"
+                          >
+                            <Barcode className="h-3.5 w-3.5 text-indigo-600" />
+                          </button>
+
                           <button
                             onClick={() => openDetailsModal(p)}
                             title="تفاصيل الصنف"
@@ -752,6 +770,29 @@ export function ProductsPage() {
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-xs"
                   />
                 </div>
+
+                {/* Live Real Barcode Preview */}
+                {formState.barcode && formState.barcode.trim().length > 0 && (
+                  <div className="sm:col-span-2 p-3 bg-white border border-slate-200 rounded-xl flex flex-col items-center justify-center shadow-xs">
+                    <div className="text-[10px] text-slate-500 font-bold mb-1 flex items-center gap-1.5">
+                      <Barcode className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>معاينة حية لشكل الباركود الفعلي عند القراءة بالماسح الضوئي:</span>
+                    </div>
+                    <BarcodeView
+                      value={formState.barcode}
+                      width={1.6}
+                      height={40}
+                      fontSize={11}
+                      margin={4}
+                    />
+                    <div className="text-xs font-bold text-slate-800 mt-1 flex items-center gap-3">
+                      <span>{formState.name || 'اسم المنتج'}</span>
+                      <span className="text-indigo-600 font-mono font-black">
+                        {Number(formState.selling_price || 0).toFixed(2)} {currencySymbol}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Category, Brand, Unit */}
@@ -1095,6 +1136,31 @@ export function ProductsPage() {
                 </div>
               </div>
 
+              {/* Barcode Display & Print Button */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex flex-col items-center">
+                  <span className="text-[10px] text-slate-400 font-bold mb-1">الباركود الفعلي المقروء بالماسح الضوئي:</span>
+                  <BarcodeView
+                    value={selectedProduct.barcode || selectedProduct.sku}
+                    width={1.6}
+                    height={40}
+                    fontSize={11}
+                    margin={3}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedProductForBarcode(selectedProduct);
+                    setIsBarcodeModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-xs transition-colors"
+                >
+                  <Printer className="w-4 h-4 text-amber-400" />
+                  <span>طباعة ملصق الباركود</span>
+                </button>
+              </div>
+
               {/* Warehouses Breakdown */}
               <div>
                 <h3 className="font-bold text-slate-900 mb-2 flex items-center gap-1.5 text-xs">
@@ -1137,6 +1203,13 @@ export function ProductsPage() {
           </div>
         </div>
       )}
+
+      {/* Barcode Label Printing Modal */}
+      <BarcodeLabelModal
+        isOpen={isBarcodeModalOpen}
+        onClose={() => setIsBarcodeModalOpen(false)}
+        product={selectedProductForBarcode}
+      />
     </div>
   );
 }

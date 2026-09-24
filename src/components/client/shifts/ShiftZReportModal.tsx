@@ -20,14 +20,19 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
   const { currencySymbol, currencyName } = useCurrency();
   const [transactions, setTransactions] = useState<CashDrawerTransaction[]>([]);
   const [printFormat, setPrintFormat] = useState<'thermal' | 'a4'>('thermal');
+  const [liveSummary, setLiveSummary] = useState<any>(null);
 
   useEffect(() => {
     if (isOpen && shift?.id) {
       shiftService.fetchShiftTransactions(shift.id)
         .then(setTransactions)
         .catch(() => setTransactions([]));
+
+      shiftService.getShiftSummary(shift.id, client?.id)
+        .then(setLiveSummary)
+        .catch(() => setLiveSummary(null));
     }
-  }, [isOpen, shift?.id]);
+  }, [isOpen, shift?.id, client?.id]);
 
   if (!isOpen) return null;
 
@@ -37,7 +42,25 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
 
   const isClosed = shift.status === 'closed' || shift.status === 'audited';
   const reportTitle = isClosed ? 'تقرير إغلاق الوردية (Z-Report)' : 'تقرير الجلسة الحالية (X-Report)';
-  const difference = shift.cash_difference ?? ((shift.closing_cash_actual || 0) - (shift.closing_cash_expected || 0));
+
+  const openingCash = Number(shift.opening_cash || 0);
+  const totalCashSales = Number(shift.total_cash_sales || liveSummary?.total_cash_sales || 0);
+  const totalCashIn = Number(shift.total_cash_in || liveSummary?.total_cash_in || 0);
+  const totalCashOut = Number(shift.total_cash_out || liveSummary?.total_cash_out || 0);
+  const totalSalesAmount = Number(shift.total_sales_amount || liveSummary?.total_sales_amount || 0);
+  const totalCardSales = Number(shift.total_card_sales || liveSummary?.total_card_sales || 0);
+  const ordersCount = Number(shift.orders_count || liveSummary?.orders_count || 0);
+
+  const expectedCash = (shift.closing_cash_expected !== null && shift.closing_cash_expected !== undefined && shift.closing_cash_expected > 0)
+    ? Number(shift.closing_cash_expected)
+    : (liveSummary?.expected_cash !== undefined ? Number(liveSummary.expected_cash) : Math.max(0, openingCash + totalCashSales + totalCashIn - totalCashOut));
+
+  const actualCash = Number(shift.closing_cash_actual || 0);
+  const difference = (shift.cash_difference !== null && shift.cash_difference !== undefined && shift.cash_difference !== 0)
+    ? Number(shift.cash_difference)
+    : (actualCash - expectedCash);
+
+  const cashierName = shift.closed_by_name || shift.cashier_name || 'الكاشير';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4 overflow-y-auto animate-in fade-in duration-200">
@@ -125,8 +148,8 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
             {/* Metadata info */}
             <div className="py-3 border-b border-dashed border-slate-300 space-y-1 text-xs">
               <div className="flex justify-between">
-                <span className="text-slate-500">الكاشير:</span>
-                <span className="font-bold">{shift.cashier_name || 'الكاشير'}</span>
+                <span className="text-slate-500">الكاشير / المسؤول:</span>
+                <span className="font-bold">{cashierName}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">وقت الفتح:</span>
@@ -141,7 +164,9 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
               <div className="flex justify-between">
                 <span className="text-slate-500">حالة الوردية:</span>
                 <span className={`font-bold ${isClosed ? 'text-slate-900' : 'text-emerald-600'}`}>
-                  {isClosed ? 'مغلقة ومطابقة' : 'مفتوحة حالياً'}
+                  {isClosed 
+                    ? (Math.abs(difference) < 0.01 ? 'مغلقة ومطابقة (0.00)' : difference < 0 ? 'مغلقة (يوجد عجز نقدي)' : 'مغلقة (يوجد فائض نقدي)')
+                    : 'مفتوحة حالياً'}
                 </span>
               </div>
             </div>
@@ -154,28 +179,28 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600">الرصيد الافتتاحي:</span>
-                <span className="font-bold font-mono">{shift.opening_cash.toFixed(2)}</span>
+                <span className="font-bold font-mono">{openingCash.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-emerald-700 font-medium">
                 <span>(+) مبيعات نقدية (كاش):</span>
-                <span className="font-bold font-mono">{shift.total_cash_sales.toFixed(2)}</span>
+                <span className="font-bold font-mono">{totalCashSales.toFixed(2)}</span>
               </div>
-              {shift.total_cash_in > 0 && (
+              {totalCashIn > 0 && (
                 <div className="flex justify-between text-blue-700">
                   <span>(+) إيداعات نثرية إضافية:</span>
-                  <span className="font-bold font-mono">+{shift.total_cash_in.toFixed(2)}</span>
+                  <span className="font-bold font-mono">+{totalCashIn.toFixed(2)}</span>
                 </div>
               )}
-              {shift.total_cash_out > 0 && (
+              {totalCashOut > 0 && (
                 <div className="flex justify-between text-rose-700">
                   <span>(-) سحوبات ومصروفات:</span>
-                  <span className="font-bold font-mono">-{shift.total_cash_out.toFixed(2)}</span>
+                  <span className="font-bold font-mono">-{totalCashOut.toFixed(2)}</span>
                 </div>
               )}
               {/* Expected Cash */}
               <div className="flex justify-between pt-1 border-t border-slate-200 font-black text-slate-900">
                 <span>الرصيد المتوقع:</span>
-                <span className="font-mono">{shift.closing_cash_expected.toFixed(2)} {currencySymbol}</span>
+                <span className="font-mono">{expectedCash.toFixed(2)} {currencySymbol}</span>
               </div>
 
               {(isClosed || (shift.closing_cash_actual !== null && shift.closing_cash_actual !== undefined)) && (
@@ -183,12 +208,12 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
                   {/* Actual Cash */}
                   <div className="flex justify-between font-black text-slate-900 pt-1">
                     <span>النقدية الفعلية:</span>
-                    <span className="font-mono">{Number(shift.closing_cash_actual || 0).toFixed(2)} {currencySymbol}</span>
+                    <span className="font-mono">{actualCash.toFixed(2)} {currencySymbol}</span>
                   </div>
 
                   {/* Difference */}
                   <div className="flex justify-between font-black text-slate-900 pt-1">
-                    <span>الفرق:</span>
+                    <span>الفرق (العجز / الزيادة):</span>
                     <span className="font-mono" dir="ltr">
                       {difference > 0 ? `+${difference.toFixed(2)}` : difference.toFixed(2)} {currencySymbol}
                     </span>
@@ -196,15 +221,15 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
 
                   {/* Status */}
                   <div className={`flex justify-between font-black p-2.5 rounded-lg mt-1 text-xs ${
-                    difference === 0 ? 'bg-emerald-50 text-emerald-800' : difference < 0 ? 'bg-rose-50 text-rose-800' : 'bg-blue-50 text-blue-800'
+                    Math.abs(difference) < 0.01 ? 'bg-emerald-50 text-emerald-800' : difference < 0 ? 'bg-rose-50 text-rose-800' : 'bg-blue-50 text-blue-800'
                   }`}>
                     <span>الحالة:</span>
                     <span className="font-black">
-                      {difference === 0 
-                        ? 'مطابق' 
+                      {Math.abs(difference) < 0.01 
+                        ? 'مطابق (0.00)' 
                         : difference < 0 
-                          ? `عجز ${Math.abs(difference).toFixed(2)} ${currencySymbol}` 
-                          : `فائض ${difference.toFixed(2)} ${currencySymbol}`}
+                          ? `عجز (${Math.abs(difference).toFixed(2)}) ${currencySymbol}` 
+                          : `فائض (+${difference.toFixed(2)}) ${currencySymbol}`}
                     </span>
                   </div>
                 </>
@@ -216,31 +241,31 @@ export const ShiftZReportModal: React.FC<ShiftZReportModalProps> = ({
               <div className="font-bold text-slate-800 pb-1">إجمالي المبيعات ووسائل الدفع</div>
               <div className="flex justify-between">
                 <span className="text-slate-600">نقدًا (Cash):</span>
-                <span className="font-mono font-bold">{shift.total_cash_sales.toFixed(2)}</span>
+                <span className="font-mono font-bold">{totalCashSales.toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-600">بطاقات وشبكة (Card/Mada):</span>
-                <span className="font-mono font-bold">{shift.total_card_sales.toFixed(2)}</span>
+                <span className="font-mono font-bold">{totalCardSales.toFixed(2)}</span>
               </div>
               {shift.total_other_sales > 0 && (
                 <div className="flex justify-between">
                   <span className="text-slate-600">تحويل ومحافظ:</span>
-                  <span className="font-mono font-bold">{shift.total_other_sales.toFixed(2)}</span>
+                  <span className="font-mono font-bold">{Number(shift.total_other_sales).toFixed(2)}</span>
                 </div>
               )}
               {shift.total_refunds_amount > 0 && (
                 <div className="flex justify-between text-rose-600">
                   <span>فواتير ملغاة / مرتجعات:</span>
-                  <span className="font-mono font-bold">-{shift.total_refunds_amount.toFixed(2)}</span>
+                  <span className="font-mono font-bold">-{Number(shift.total_refunds_amount).toFixed(2)}</span>
                 </div>
               )}
               <div className="flex justify-between pt-1 border-t border-slate-200 font-black text-slate-900 text-sm">
-                <span>صافي مبيعات الوردية:</span>
-                <span className="font-mono">{shift.total_sales_amount.toFixed(2)} {currencySymbol}</span>
+                <span>إجمالي مبيعات الوردية:</span>
+                <span className="font-mono">{totalSalesAmount.toFixed(2)} {currencySymbol}</span>
               </div>
               <div className="flex justify-between text-slate-500 pt-0.5">
-                <span>إجمالي عدد الفواتير:</span>
-                <span className="font-bold">{shift.orders_count} فاتورة</span>
+                <span>عدد الفواتير المنفذة:</span>
+                <span className="font-mono font-bold">{ordersCount} فاتورة</span>
               </div>
             </div>
 
