@@ -106,6 +106,12 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
       const result = await shiftService.recordCashDrawerMovement(payload);
       // Refresh active shift summary
       await get().loadActiveShift(payload.client_id);
+
+      // Dispatch global shift event so POS and all screens reflect drawer changes instantly
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
+
       set({ isCashMovementModalOpen: false, isLoading: false });
       return result;
     } catch (err: any) {

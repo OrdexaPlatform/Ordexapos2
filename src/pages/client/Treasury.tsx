@@ -18,6 +18,7 @@ import {
   Clock 
 } from 'lucide-react';
 import { useClientStore } from '../../store/clientStore';
+import { useAuthStore } from '../../store/authStore';
 import { useShiftStore } from '../../store/shiftStore';
 import { useCurrency } from '../../hooks/useCurrency';
 import { supabase } from '../../lib/supabase';
@@ -37,6 +38,9 @@ interface DrawerTransaction {
 
 export function TreasuryPage() {
   const { client } = useClientStore();
+  const { clientUser } = useAuthStore();
+  const clientId = clientUser?.client_id || client?.id;
+
   const { activeShift: currentShift, loadActiveShift, recordCashMovement } = useShiftStore();
   const { formatPrice } = useCurrency();
 
@@ -51,21 +55,35 @@ export function TreasuryPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (client?.id) {
-      loadActiveShift(client.id);
-      loadTransactions();
-    }
-  }, [client?.id, currentShift?.id]);
+    if (clientId) {
+      loadActiveShift(clientId);
+      loadTransactions(clientId);
 
-  const loadTransactions = async () => {
-    if (!client?.id) return;
+      const handleShiftUpdate = () => {
+        loadActiveShift(clientId);
+        loadTransactions(clientId);
+      };
+
+      window.addEventListener('ordexa:shift-updated', handleShiftUpdate);
+      window.addEventListener('focus', handleShiftUpdate);
+
+      return () => {
+        window.removeEventListener('ordexa:shift-updated', handleShiftUpdate);
+        window.removeEventListener('focus', handleShiftUpdate);
+      };
+    }
+  }, [clientId]);
+
+  const loadTransactions = async (targetClientId?: string) => {
+    const activeClientId = targetClientId || clientId;
+    if (!activeClientId) return;
     setLoading(true);
     let list: DrawerTransaction[] = [];
     try {
       const { data, error } = await supabase
         .from('cash_drawer_transactions')
         .select('*')
-        .eq('client_id', client.id)
+        .eq('client_id', activeClientId)
         .order('created_at', { ascending: false })
         .limit(50);
 
@@ -78,7 +96,7 @@ export function TreasuryPage() {
 
     // Merge offline pending cash movements
     try {
-      const pending = await offlineStorage.getPendingCashMovements(client.id);
+      const pending = await offlineStorage.getPendingCashMovements(activeClientId);
       if (pending && pending.length > 0) {
         const pendingMapped: DrawerTransaction[] = pending.map((p) => ({
           id: p.local_transaction_id,
@@ -112,7 +130,7 @@ export function TreasuryPage() {
 
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!client?.id) return;
+    if (!clientId) return;
 
     if (!currentShift || currentShift.status !== 'open' || !currentShift.id) {
       toast.error('يجب فتح وردية أولاً لإجراء حركة على الخزينة.');
@@ -132,18 +150,19 @@ export function TreasuryPage() {
     setSubmitting(true);
     try {
       await recordCashMovement({
-        client_id: client.id,
+        client_id: clientId,
         shift_id: currentShift.id,
         transaction_type: txType,
         amount: numAmount,
         reason: reason.trim(),
+        performed_by: clientUser?.id,
       });
 
-      toast.success(txType === 'cash_in' ? 'تم إيداع المبلغ بالدرج بنجاح' : 'تم تسجيل سحب المبلغ من الدرج بنجاح');
+      toast.success(txType === 'cash_in' ? 'تم إيداع المبلغ بالدرج وتحديث رصيد الوردية بنجاح' : 'تم تسجيل سحب المبلغ من الدرج وتحديث رصيد الوردية بنجاح');
       setIsModalOpen(false);
       setAmount('');
       setReason('');
-      await loadTransactions();
+      await loadTransactions(clientId);
     } catch (err: any) {
       toast.error(err.message || 'فشل تسجيل حركة النقدية');
     } finally {
@@ -153,14 +172,19 @@ export function TreasuryPage() {
 
   // Compute shift cash metrics
   const openingCash = Number(currentShift?.opening_cash || 0);
+  const shiftCashSales = Number(currentShift?.total_cash_sales || 0);
   const shiftTransactions = transactions.filter((t) => t.shift_id === currentShift?.id);
-  const shiftCashIn = shiftTransactions
+  const shiftCashInMovements = shiftTransactions
     .filter((t) => t.transaction_type === 'cash_in')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const shiftCashOut = shiftTransactions
-    .filter((t) => t.transaction_type === 'cash_out')
+    .filter((t) => t.transaction_type === 'cash_out' || t.transaction_type === 'drop_to_safe')
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const expectedCashInDrawer = openingCash + shiftCashIn - shiftCashOut;
+  const totalReceivedCash = shiftCashSales + shiftCashInMovements;
+  const shiftCashIn = totalReceivedCash;
+  const expectedCashInDrawer = currentShift?.closing_cash_expected !== undefined && currentShift?.closing_cash_expected !== null
+    ? Number(currentShift.closing_cash_expected)
+    : Math.max(0, openingCash + totalReceivedCash - shiftCashOut);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12" dir="rtl">

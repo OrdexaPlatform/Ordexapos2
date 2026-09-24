@@ -2232,7 +2232,6 @@ app.post('/api/shifts/cash-movement', async (req, res) => {
         id: movementId,
         client_id: clientId,
         shift_id: shift.id,
-        register_id: shift.register_id || undefined,
         transaction_type: transactionType,
         amount: numAmount,
         reason: finalReason,
@@ -2245,24 +2244,42 @@ app.post('/api/shifts/cash-movement', async (req, res) => {
       return res.status(500).json({ error: insertErr.message || 'فشل حفظ حركة الخزينة في قاعدة البيانات' });
     }
 
-    // 5. Update shift total_cash_in / total_cash_out
+    // 5. Update shift total_cash_in / total_cash_out and closing_cash_expected
     const currentCashIn = Number(shift.total_cash_in || 0);
     const currentCashOut = Number(shift.total_cash_out || 0);
+    const newCashIn = transactionType === 'cash_in' ? currentCashIn + numAmount : currentCashIn;
+    const newCashOut = transactionType !== 'cash_in' ? currentCashOut + numAmount : currentCashOut;
 
-    const shiftUpdate: Record<string, any> = {
-      updated_at: new Date().toISOString()
-    };
-    if (transactionType === 'cash_in') {
-      shiftUpdate.total_cash_in = currentCashIn + numAmount;
-    } else {
-      shiftUpdate.total_cash_out = currentCashOut + numAmount;
+    let expectedCash = 0;
+    try {
+      const { data: sumData } = await supabaseAdmin.rpc('get_shift_summary', {
+        p_shift_id: shift.id,
+        p_client_id: clientId,
+      });
+      if (sumData && sumData.expected_cash !== undefined) {
+        expectedCash = Number(sumData.expected_cash || 0);
+      }
+    } catch {
+      const openCash = Number(shift.opening_cash || 0);
+      const cashSales = Number(shift.total_cash_sales || 0);
+      expectedCash = Math.max(0, openCash + cashSales + newCashIn - newCashOut);
     }
 
-    await supabaseAdmin
-      .from('shifts')
-      .update(shiftUpdate)
-      .eq('id', shift.id)
-      .catch((e: any) => console.warn('Could not update shift totals:', e));
+    const shiftUpdate: Record<string, any> = {
+      total_cash_in: newCashIn,
+      total_cash_out: newCashOut,
+      closing_cash_expected: expectedCash,
+      updated_at: new Date().toISOString()
+    };
+
+    try {
+      await supabaseAdmin
+        .from('shifts')
+        .update(shiftUpdate)
+        .eq('id', shift.id);
+    } catch (e: any) {
+      console.warn('Could not update shift totals:', e);
+    }
 
     return res.json({
       success: true,
@@ -2270,7 +2287,10 @@ app.post('/api/shifts/cash-movement', async (req, res) => {
       shift_id: shift.id,
       amount: numAmount,
       transaction_type: transactionType,
-      message: 'تم تسجيل حركة الخزينة بنجاح'
+      closing_cash_expected: expectedCash,
+      total_cash_in: newCashIn,
+      total_cash_out: newCashOut,
+      message: 'تم تسجيل حركة الخزينة بنجاح ومطابقة رصيد الدرج'
     });
   } catch (err: any) {
     console.error('Cash movement error:', err);
