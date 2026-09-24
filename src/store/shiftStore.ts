@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { Shift, OpenShiftPayload, CloseShiftPayload, CashDrawerMovementPayload } from '../types';
 import { shiftService } from '../lib/shiftService';
+import { offlineStorage } from '../lib/offline/offlineStorage';
+import { useAuthStore } from './authStore';
 
 interface ShiftState {
   activeShift: Shift | null;
@@ -40,9 +42,10 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   setCashMovementModalOpen: (open) => set({ isCashMovementModalOpen: open }),
 
   loadActiveShift: async (clientId?: string) => {
+    const resolvedClientId = clientId || useAuthStore.getState().clientUser?.client_id;
     set({ isLoading: true, error: null });
     try {
-      const shift = await shiftService.getActiveShift(clientId);
+      const shift = await shiftService.getActiveShift(resolvedClientId);
       set({ activeShift: shift, isInitialized: true, isLoading: false });
     } catch (err: any) {
       console.error('Failed to load active shift in store:', err);
@@ -53,9 +56,25 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
   openShift: async (payload: OpenShiftPayload) => {
     set({ isLoading: true, error: null });
     try {
-      await shiftService.openShift(payload);
-      // Reload active shift
+      const res = await shiftService.openShift(payload);
+      // Reload active shift immediately
       await get().loadActiveShift(payload.client_id);
+      
+      // If loadActiveShift didn't populate activeShift yet, check offlineStorage / localStorage
+      if (!get().activeShift && res?.shift_id) {
+        try {
+          const cached = await offlineStorage.getCurrentShift(payload.client_id);
+          if (cached && cached.status === 'open') {
+            set({ activeShift: cached });
+          }
+        } catch {}
+      }
+
+      // Dispatch global shift event so all views (POS, Shifts, Headers) refresh in sync
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
+
       set({ isOpeningModalOpen: false, isLoading: false });
     } catch (err: any) {
       set({ error: err.message, isLoading: false });
@@ -68,6 +87,12 @@ export const useShiftStore = create<ShiftState>((set, get) => ({
     try {
       const result = await shiftService.closeShift(payload);
       set({ activeShift: null, isClosingModalOpen: false, isLoading: false });
+
+      // Dispatch global shift event so all views refresh in sync
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
+
       return result;
     } catch (err: any) {
       set({ error: err.message, isLoading: false });

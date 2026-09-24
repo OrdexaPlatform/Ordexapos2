@@ -112,6 +112,10 @@ export const OpenShiftModal: React.FC<OpenShiftModalProps> = ({
         opened_by: clientUser?.id,
       });
 
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
+
       toast.success('تم فتح الوردية بنجاح! جاهز لبدء البيع');
       onClose();
     } catch (err: any) {

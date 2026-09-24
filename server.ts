@@ -1529,6 +1529,79 @@ app.post('/api/client/pos-settings', (req, res) => {
 // ==========================================
 // Atomic Shift Management Endpoints
 // ==========================================
+app.get('/api/shifts/active', async (req, res) => {
+  try {
+    const clientId = (req.query.clientId as string) || (req.query.client_id as string);
+    const userId = (req.query.userId as string) || (req.query.user_id as string);
+    const warehouseId = (req.query.warehouseId as string) || (req.query.warehouse_id as string);
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId مطلوب لجلب الوردية النشطة' });
+    }
+
+    let query = supabaseAdmin
+      .from('shifts')
+      .select(`
+        *,
+        warehouse:warehouses(id, name, code),
+        register:cash_registers(id, name, code),
+        opened_by_user:client_users!shifts_opened_by_fkey(id, name, email, role)
+      `)
+      .eq('client_id', clientId)
+      .eq('status', 'open');
+
+    if (warehouseId) {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+
+    query = query.order('opened_at', { ascending: false }).limit(1);
+
+    const { data: shiftRows, error: shiftErr } = await query;
+    if (shiftErr) {
+      console.error('Error fetching active shift from server:', shiftErr);
+      return res.status(500).json({ error: shiftErr.message });
+    }
+
+    if (!shiftRows || shiftRows.length === 0) {
+      return res.json({ success: true, shift: null });
+    }
+
+    const shiftData = shiftRows[0];
+
+    // Compute live authoritative summary if possible
+    let summary: any = null;
+    try {
+      const { data: sumData } = await supabaseAdmin.rpc('get_shift_summary', {
+        p_shift_id: shiftData.id,
+        p_client_id: clientId,
+      });
+      if (sumData) summary = sumData;
+    } catch {}
+
+    const openerName = (shiftData.opened_by_user as any)?.name || (shiftData.opened_by_user as any)?.full_name || 'الكاشير';
+    const activeShiftObj = {
+      ...shiftData,
+      cashier_name: openerName,
+      register_name: shiftData.register?.name || 'الصندوق الرئيسي',
+      warehouse_name: shiftData.warehouse?.name || 'المستودع الرئيسي',
+      closing_cash_expected: summary ? Number(summary.expected_cash || 0) : Number(shiftData.opening_cash || 0),
+      total_sales_amount: summary ? Number(summary.total_sales_amount || 0) : Number(shiftData.total_sales_amount || 0),
+      total_cash_sales: summary ? Number(summary.total_cash_sales || 0) : Number(shiftData.total_cash_sales || 0),
+      total_card_sales: summary ? Number(summary.total_card_sales || 0) : Number(shiftData.total_card_sales || 0),
+      total_other_sales: summary ? Number(summary.total_other_sales || 0) : Number(shiftData.total_other_sales || 0),
+      total_refunds_amount: summary ? Number(summary.total_refunds_amount || 0) : Number(shiftData.total_refunds_amount || 0),
+      total_cash_in: summary ? Number(summary.total_cash_in || 0) : Number(shiftData.total_cash_in || 0),
+      total_cash_out: summary ? Number(summary.total_cash_out || 0) : Number(shiftData.total_cash_out || 0),
+      orders_count: summary ? Number(summary.orders_count || 0) : Number(shiftData.orders_count || 0),
+    };
+
+    return res.json({ success: true, shift: activeShiftObj });
+  } catch (err: any) {
+    console.error('Active shift endpoint error:', err);
+    return res.status(500).json({ error: err.message || 'Error fetching active shift' });
+  }
+});
+
 app.post('/api/shifts/open', async (req, res) => {
   try {
     const {

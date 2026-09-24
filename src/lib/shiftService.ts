@@ -32,66 +32,99 @@ export const shiftService = {
     }
 
     try {
-      const { data, error } = await supabase.rpc('get_active_shift', {
-        p_client_id: clientId || null,
-      });
-
-      if (error) {
-        // If RPC isn't executed in DB yet or fails, fallback to direct query
-        console.warn('RPC get_active_shift returned error, trying fallback:', error.message);
-        const fallbackShift = await this.getActiveShiftFallback(clientId);
-        if (fallbackShift && clientId) {
-          offlineStorage.saveCurrentShift(clientId, fallbackShift).catch(() => {});
-          try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(fallbackShift)); } catch {}
-        }
-        return fallbackShift;
-      }
-
-      if (!data) {
-        if (clientId) {
-          // If server explicitly says no open shift, clear local shift
-          offlineStorage.saveCurrentShift(clientId, null).catch(() => {});
-          try { localStorage.removeItem(`ordexa_active_shift_${clientId}`); } catch {}
-        }
-        return null;
-      }
-
-      // Extract shift object
-      const shiftObj: Shift = {
-        id: data.id,
-        client_id: data.client_id,
-        shift_number: data.shift_number,
-        status: data.status,
-        opened_at: data.opened_at,
-        opened_by: data.opened_by,
-        cashier_name: data.cashier_name,
-        register_id: data.register_id,
-        register_name: data.register_name,
-        warehouse_id: data.warehouse_id,
-        warehouse_name: data.warehouse_name,
-        opening_cash: Number(data.opening_cash || 0),
-        opening_notes: data.opening_notes,
-        closing_cash_expected: Number(data.summary?.expected_cash || 0),
-        closing_cash_actual: data.summary?.closing_cash_actual,
-        cash_difference: Number(data.summary?.cash_difference || 0),
-        total_sales_amount: Number(data.summary?.total_sales_amount || 0),
-        total_cash_sales: Number(data.summary?.total_cash_sales || 0),
-        total_card_sales: Number(data.summary?.total_card_sales || 0),
-        total_other_sales: Number(data.summary?.total_other_sales || 0),
-        total_refunds_amount: Number(data.summary?.total_refunds_amount || 0),
-        total_cash_in: Number(data.summary?.total_cash_in || 0),
-        total_cash_out: Number(data.summary?.total_cash_out || 0),
-        orders_count: Number(data.summary?.orders_count || 0),
-        created_at: data.opened_at,
-        updated_at: data.opened_at,
-      };
+      // 1. Authoritative Direct DB Query for currently open shift in this client
+      let query = supabase
+        .from('shifts')
+        .select(`
+          *,
+          warehouse:warehouses(id, name, code),
+          register:cash_registers(id, name, code),
+          opened_by_user:client_users!shifts_opened_by_fkey(id, name, email, role)
+        `)
+        .eq('status', 'open');
 
       if (clientId) {
-        offlineStorage.saveCurrentShift(clientId, shiftObj).catch(() => {});
-        try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(shiftObj)); } catch {}
+        query = query.eq('client_id', clientId);
       }
 
-      return shiftObj;
+      const { data: directShifts, error: directErr } = await query
+        .order('opened_at', { ascending: false })
+        .limit(1);
+
+      if (!directErr && directShifts && directShifts.length > 0) {
+        const item = directShifts[0];
+
+        // Fetch live authoritative reconciliation figures if possible
+        let summary: any = null;
+        try {
+          const { data: sumData } = await supabase.rpc('get_shift_summary', {
+            p_shift_id: item.id,
+            p_client_id: item.client_id,
+          });
+          if (sumData) summary = sumData;
+        } catch {}
+
+        const openerName = (item.opened_by_user as any)?.name || (item.opened_by_user as any)?.full_name || 'الكاشير';
+        const shiftObj: Shift = {
+          id: item.id,
+          client_id: item.client_id,
+          shift_number: item.shift_number,
+          status: item.status,
+          opened_at: item.opened_at,
+          opened_by: item.opened_by,
+          cashier_name: openerName,
+          register_id: item.register_id,
+          register_name: item.register?.name || 'الصندوق الرئيسي',
+          warehouse_id: item.warehouse_id,
+          warehouse_name: item.warehouse?.name || 'المستودع الرئيسي',
+          opening_cash: Number(item.opening_cash || 0),
+          opening_notes: item.opening_notes,
+          closing_cash_expected: summary ? Number(summary.expected_cash || 0) : Number(item.closing_cash_expected || item.opening_cash || 0),
+          closing_cash_actual: item.closing_cash_actual,
+          cash_difference: summary ? Number(summary.cash_difference || 0) : Number(item.cash_difference || 0),
+          total_sales_amount: summary ? Number(summary.total_sales_amount || 0) : Number(item.total_sales_amount || 0),
+          total_cash_sales: summary ? Number(summary.total_cash_sales || 0) : Number(item.total_cash_sales || 0),
+          total_card_sales: summary ? Number(summary.total_card_sales || 0) : Number(item.total_card_sales || 0),
+          total_other_sales: summary ? Number(summary.total_other_sales || 0) : Number(item.total_other_sales || 0),
+          total_refunds_amount: summary ? Number(summary.total_refunds_amount || 0) : Number(item.total_refunds_amount || 0),
+          total_cash_in: summary ? Number(summary.total_cash_in || 0) : Number(item.total_cash_in || 0),
+          total_cash_out: summary ? Number(summary.total_cash_out || 0) : Number(item.total_cash_out || 0),
+          orders_count: summary ? Number(summary.orders_count || 0) : Number(item.orders_count || 0),
+          created_at: item.opened_at,
+          updated_at: item.opened_at,
+        };
+
+        if (clientId) {
+          offlineStorage.saveCurrentShift(clientId, shiftObj).catch(() => {});
+          try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(shiftObj)); } catch {}
+        }
+
+        return shiftObj;
+      }
+
+      // 2. Server API fallback if direct query returned error or empty
+      if (clientId) {
+        try {
+          const apiRes = await fetch(`/api/shifts/active?clientId=${encodeURIComponent(clientId)}`);
+          if (apiRes.ok) {
+            const apiJson = await apiRes.json();
+            if (apiJson.success && apiJson.shift) {
+              offlineStorage.saveCurrentShift(clientId, apiJson.shift).catch(() => {});
+              try { localStorage.setItem(`ordexa_active_shift_${clientId}`, JSON.stringify(apiJson.shift)); } catch {}
+              return apiJson.shift;
+            }
+          }
+        } catch (apiErr) {
+          console.warn('API get active shift fallback error:', apiErr);
+        }
+      }
+
+      // 3. If both confirmed there is no open shift in DB:
+      if (clientId) {
+        offlineStorage.saveCurrentShift(clientId, null).catch(() => {});
+        try { localStorage.removeItem(`ordexa_active_shift_${clientId}`); } catch {}
+      }
+      return null;
     } catch (err: any) {
       console.error('Failed to get active shift, trying local cache fallback:', err);
       if (clientId) {
@@ -110,7 +143,7 @@ export const shiftService = {
   },
 
   /**
-   * Fallback query in case RPC execution hasn't run yet in dev
+   * Fallback query in case direct query needs simple retry
    */
   async getActiveShiftFallback(clientId?: string): Promise<Shift | null> {
     try {
@@ -120,7 +153,6 @@ export const shiftService = {
           *,
           warehouse:warehouses(id, name, code),
           register:cash_registers(id, name, code),
-          device:devices(id, device_name, device_fingerprint, status),
           opened_by_user:client_users!shifts_opened_by_fkey(id, name, role)
         `)
         .eq('status', 'open')

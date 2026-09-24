@@ -318,8 +318,17 @@ export const POSPage: React.FC = () => {
       };
 
       window.addEventListener('ordexa:pos-settings-updated', handleSettingsUpdate as EventListener);
+
+      const handleShiftUpdate = () => {
+        loadActiveShift(clientId);
+      };
+      window.addEventListener('ordexa:shift-updated', handleShiftUpdate);
+      window.addEventListener('focus', handleShiftUpdate);
+
       return () => {
         window.removeEventListener('ordexa:pos-settings-updated', handleSettingsUpdate as EventListener);
+        window.removeEventListener('ordexa:shift-updated', handleShiftUpdate);
+        window.removeEventListener('focus', handleShiftUpdate);
       };
     }
   }, [clientId, setTaxConfig]);

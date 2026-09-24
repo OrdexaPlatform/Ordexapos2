@@ -151,6 +151,9 @@ export const CloseShiftModal: React.FC<CloseShiftModalProps> = ({
       }
 
       toast.success('تم إغلاق الوردية وتوثيق تسوية الصندوق بنجاح!');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
       onClose();
       if (onShiftClosed) {
         onShiftClosed({
