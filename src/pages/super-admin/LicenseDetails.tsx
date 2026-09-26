@@ -85,9 +85,7 @@ export function LicenseDetails() {
   };
 
   const handleDeactivateDevice = async (device: Device) => {
-    if (!window.confirm(`هل أنت متأكد من رغبتك في إلغاء تفعيل الجهاز "${device.device_name}"؟ سيتم تحرير المقعد في هذا الترخيص فوراً دون حذف سجل الجهاز.`)) {
-      return;
-    }
+    const toastId = toast.loading(`جارٍ إلغاء تفعيل الجهاز "${device.device_name}"...`);
 
     try {
       const result = await deactivateDevice(device.id, 'إلغاء التفعيل اليدوي من تفاصيل الترخيص');
@@ -199,13 +197,7 @@ export function LicenseDetails() {
   const handleStatusChange = async (newStatus: 'active' | 'suspended' | 'revoked') => {
     if (!license) return;
 
-    const messages = {
-      active: 'هل أنت متأكد من إعادة تفعيل هذا الترخيص؟',
-      suspended: 'هل أنت متأكد من إيقاف هذا الترخيص مؤقتاً؟ لن تتمكن الأجهزة من العمل أثناء الإيقاف.',
-      revoked: 'تحذير: هل أنت متأكد من الإلغاء النهائي لهذا الترخيص؟ هذا الإجراء سيوقف الأجهزة نهائياً.',
-    };
-
-    if (!window.confirm(messages[newStatus])) return;
+    const toastId = toast.loading('جارٍ تحديث حالة الترخيص...');
 
     try {
       const { error } = await supabase
@@ -229,11 +221,11 @@ export function LicenseDetails() {
         },
       });
 
-      toast.success('تم تحديث حالة الترخيص بنجاح');
+      toast.success('تم تحديث حالة الترخيص بنجاح', { id: toastId });
       fetchLicenseData();
     } catch (err: any) {
       console.error('Error updating license status:', err);
-      toast.error(err.message || 'فشل في تحديث حالة الترخيص');
+      toast.error(err.message || 'فشل في تحديث حالة الترخيص', { id: toastId });
     }
   };
 

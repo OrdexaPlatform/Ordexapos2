@@ -275,11 +275,6 @@ export function ProductsPage() {
   const handleToggleActive = async (product: Product) => {
     if (!client?.id) return;
     const nextStatus = !product.is_active;
-    const confirmMsg = nextStatus 
-      ? `هل تريد إعادة تفعيل المنتج "${product.name}"؟`
-      : `هل تريد إيقاف/تعطيل المنتج "${product.name}"؟ لن يظهر في نقطة البيع`;
-
-    if (!window.confirm(confirmMsg)) return;
 
     try {
       await toggleProductActive(product.id, client.id, nextStatus);

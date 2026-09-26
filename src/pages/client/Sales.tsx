@@ -38,7 +38,7 @@ import toast from 'react-hot-toast';
 export const SalesPage: React.FC = () => {
   const { clientUser } = useAuthStore();
   const { client } = useClientStore();
-  const clientId = clientUser?.client_id;
+  const clientId = clientUser?.client_id || client?.id;
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);

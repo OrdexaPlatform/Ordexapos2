@@ -51,12 +51,12 @@ import toast from 'react-hot-toast';
 import { fetchClientPOSSettings, getClientPOSSettings } from '../../lib/clientSettingsService';
 
 export const POSPage: React.FC = () => {
-  const { clientUser } = useAuthStore();
+  const { clientUser, user } = useAuthStore();
   const { client } = useClientStore();
   const { hasPermission } = usePermissions();
   const { currencySymbol } = useCurrency();
   const canEditPrice = hasPermission('pos.edit_price');
-  const clientId = clientUser?.client_id;
+  const clientId = clientUser?.client_id || client?.id;
 
   // POS Terminal & Device Licensing Store
   const { 
@@ -580,7 +580,7 @@ export const POSPage: React.FC = () => {
       ],
       discountAmount: getInvoiceDiscountAmount(),
       notes: paymentData.notes || cartNotes || null,
-      createdBy: clientUser?.id || null
+      createdBy: clientUser?.id || user?.id || null
     };
 
     const result = await executeCompleteSale(payload);

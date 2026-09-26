@@ -824,6 +824,28 @@ export const shiftService = {
       limit?: number;
     }
   ): Promise<Shift[]> {
+    if (!clientId) return [];
+
+    // 1. Primary: Secure server endpoint (unrestricted by client RLS for user names)
+    try {
+      const params = new URLSearchParams();
+      params.append('clientId', clientId);
+      if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
+      if (filters?.warehouseId && filters.warehouseId !== 'all') params.append('warehouseId', filters.warehouseId);
+      if (filters?.limit) params.append('limit', String(filters.limit));
+
+      const res = await fetch(`/api/shifts?${params.toString()}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.shifts)) {
+          return json.shifts;
+        }
+      }
+    } catch (e) {
+      console.warn('API fetchShifts failed, falling back to direct query:', e);
+    }
+
+    // 2. Direct Supabase Fallback
     let query = supabase
       .from('shifts')
       .select(`

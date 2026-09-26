@@ -973,6 +973,35 @@ export async function fetchSales(
     };
   }
 
+  // 1. Primary: Secure server endpoint (unrestricted by RLS for user names)
+  try {
+    const params = new URLSearchParams();
+    params.append('clientId', clientId);
+    if (filters.search) params.append('search', filters.search);
+    if (filters.warehouseId && filters.warehouseId !== 'all') params.append('warehouseId', filters.warehouseId);
+    if (filters.saleStatus && filters.saleStatus !== 'all') params.append('saleStatus', filters.saleStatus);
+    if (filters.paymentStatus && filters.paymentStatus !== 'all') params.append('paymentStatus', filters.paymentStatus);
+    if (filters.startDate) params.append('startDate', filters.startDate);
+    if (filters.endDate) params.append('endDate', filters.endDate);
+    if (filters.page) params.append('page', String(filters.page));
+    if (filters.pageSize) params.append('pageSize', String(filters.pageSize));
+
+    const res = await fetch(`/api/sales?${params.toString()}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && Array.isArray(json.sales)) {
+        return {
+          sales: json.sales,
+          totalCount: json.totalCount,
+          stats: json.stats
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('API fetchSales failed, falling back to direct query:', e);
+  }
+
+  // 2. Direct Supabase Fallback
   const {
     search = '',
     warehouseId,

@@ -1475,6 +1475,151 @@ app.post('/api/client/update', async (req, res) => {
   }
 });
 
+// Dedicated endpoint to change client status (active / suspended / inactive)
+app.post('/api/client/status', async (req, res) => {
+  try {
+    const { clientId, status } = req.body;
+    if (!clientId || !status) {
+      return res.status(400).json({ error: 'معرف المنشأة والحالة مطلوبان' });
+    }
+
+    const { data: updatedClient, error } = await supabaseAdmin
+      .from('clients')
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', clientId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Log activity
+    try {
+      await supabaseAdmin.from('activity_logs').insert({
+        actor_type: 'super_admin',
+        action: 'change_client_status',
+        entity_type: 'client',
+        entity_id: clientId,
+        metadata: { status },
+      });
+    } catch (logErr) {
+      console.warn('Could not log client status activity:', logErr);
+    }
+
+    return res.json({
+      success: true,
+      client: updatedClient,
+      message: status === 'suspended' ? 'تم إيقاف حساب المنشأة بنجاح' : 'تم تفعيل حساب المنشأة بنجاح',
+    });
+  } catch (err: any) {
+    console.error('Error changing client status:', err);
+    return res.status(500).json({ error: err.message || 'فشل تحديث حالة المنشأة' });
+  }
+});
+
+// Dedicated endpoint to change client user status (active / inactive)
+app.post('/api/client-user/toggle-status', async (req, res) => {
+  try {
+    const { userId, clientId, status } = req.body;
+    if (!userId || !status) {
+      return res.status(400).json({ error: 'معرف المستخدم والحالة مطلوبان' });
+    }
+
+    let query = supabaseAdmin
+      .from('client_users')
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId);
+
+    if (clientId) {
+      query = query.eq('client_id', clientId);
+    }
+
+    const { data: updatedUser, error } = await query.select().single();
+    if (error) throw error;
+
+    // Log activity
+    try {
+      await supabaseAdmin.from('activity_logs').insert({
+        actor_type: 'system',
+        action: status === 'active' ? 'user_activated' : 'user_deactivated',
+        entity_type: 'client_user',
+        entity_id: userId,
+        metadata: { client_id: clientId, status },
+      });
+    } catch (logErr) {
+      console.warn('Could not log user status activity:', logErr);
+    }
+
+    return res.json({
+      success: true,
+      user: updatedUser,
+      message: status === 'active' ? 'تم تفعيل الحساب بنجاح' : 'تم إيقاف/تعطيل الحساب بنجاح',
+    });
+  } catch (err: any) {
+    console.error('Error toggling client user status:', err);
+    return res.status(500).json({ error: err.message || 'فشل تغيير حالة المستخدم' });
+  }
+});
+
+// Endpoint to update client user permissions and role
+app.post('/api/client-user/update', async (req, res) => {
+  try {
+    const { userId, clientId, name, phone, role, status, custom_permissions } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'معرف المستخدم مطلوب' });
+    }
+
+    const updates: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+
+    if (name !== undefined) updates.name = String(name).trim();
+    if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
+    if (role !== undefined) updates.role = role;
+    if (status !== undefined) updates.status = status;
+    if (custom_permissions !== undefined) updates.custom_permissions = custom_permissions;
+
+    let query = supabaseAdmin
+      .from('client_users')
+      .update(updates)
+      .eq('id', userId);
+
+    if (clientId) {
+      query = query.eq('client_id', clientId);
+    }
+
+    const { data: updatedUser, error } = await query.select().single();
+    if (error) throw error;
+
+    // Log activity
+    try {
+      await supabaseAdmin.from('activity_logs').insert({
+        actor_type: 'system',
+        action: 'user_updated',
+        entity_type: 'client_user',
+        entity_id: userId,
+        metadata: { client_id: clientId, updated_fields: Object.keys(updates) },
+      });
+    } catch (logErr) {
+      console.warn('Could not log user update activity:', logErr);
+    }
+
+    return res.json({
+      success: true,
+      user: updatedUser,
+      message: 'تم تحديث بيانات وصلاحيات المستخدم بنجاح',
+    });
+  } catch (err: any) {
+    console.error('Error updating client user:', err);
+    return res.status(500).json({ error: err.message || 'فشل تحديث بيانات المستخدم' });
+  }
+});
+
 // ==========================================
 // Client POS & Print Preferences Endpoints
 // ==========================================
@@ -1599,6 +1744,82 @@ app.get('/api/shifts/active', async (req, res) => {
   } catch (err: any) {
     console.error('Active shift endpoint error:', err);
     return res.status(500).json({ error: err.message || 'Error fetching active shift' });
+  }
+});
+
+app.get('/api/shifts', async (req, res) => {
+  try {
+    const clientId = (req.query.clientId as string) || (req.query.client_id as string);
+    const status = req.query.status as string;
+    const warehouseId = (req.query.warehouseId as string) || (req.query.warehouse_id as string);
+    const limit = parseInt((req.query.limit as string) || '100', 10);
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId مطلوب' });
+    }
+
+    let query = supabaseAdmin
+      .from('shifts')
+      .select(`
+        *,
+        warehouse:warehouses(id, name, code),
+        register:cash_registers(id, name, code),
+        opened_by_user:client_users!shifts_opened_by_fkey(id, name, email, role),
+        closed_by_user:client_users!shifts_closed_by_fkey(id, name, email, role)
+      `)
+      .eq('client_id', clientId)
+      .order('opened_at', { ascending: false });
+
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
+    if (warehouseId && warehouseId !== 'all') {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+    if (limit) {
+      query = query.limit(limit);
+    }
+
+    const { data: shifts, error } = await query;
+    if (error) {
+      console.error('Error fetching shifts via API:', error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    // Lookup user names for any shifts where opened_by_user or closed_by_user was not resolved
+    const userIdsToLookup = new Set<string>();
+    for (const s of (shifts || [])) {
+      if (s.opened_by && !(s.opened_by_user as any)?.name) userIdsToLookup.add(s.opened_by);
+      if (s.closed_by && !(s.closed_by_user as any)?.name) userIdsToLookup.add(s.closed_by);
+    }
+
+    const fallbackUserMap = new Map<string, string>();
+    if (userIdsToLookup.size > 0) {
+      const { data: cuList } = await supabaseAdmin
+        .from('client_users')
+        .select('id, name')
+        .in('id', Array.from(userIdsToLookup));
+      for (const cu of (cuList || [])) {
+        fallbackUserMap.set(cu.id, cu.name);
+      }
+    }
+
+    const mapped = (shifts || []).map((s: any) => {
+      const openerName = s.opened_by_user?.name || s.opened_by_user?.full_name || fallbackUserMap.get(s.opened_by) || 'الكاشير';
+      const closerName = s.closed_by_user?.name || s.closed_by_user?.full_name || fallbackUserMap.get(s.closed_by) || (s.status === 'closed' ? openerName : null);
+      return {
+        ...s,
+        cashier_name: openerName,
+        closed_by_name: closerName,
+        register_name: s.register?.name || 'الصندوق الرئيسي',
+        warehouse_name: s.warehouse?.name || 'المستودع',
+      };
+    });
+
+    return res.json({ success: true, shifts: mapped });
+  } catch (err: any) {
+    console.error('GET /api/shifts error:', err);
+    return res.status(500).json({ error: err.message || 'Error fetching shifts' });
   }
 });
 
@@ -2410,12 +2631,14 @@ app.post('/api/sales/complete', async (req, res) => {
     const nextSeq = (count || 0) + 1;
     const invoiceNumber = `INV-${String(nextSeq).padStart(6, '0')}`;
 
-    // Resolve created_by client user id
+    // Resolve created_by client user id and effective shift_id
     let effectiveCreatedBy = createdBy;
+    let effectiveShiftId = shiftId;
+
     if (createdBy) {
       const { data: cu } = await supabaseAdmin
         .from('client_users')
-        .select('id')
+        .select('id, name')
         .eq('client_id', clientId)
         .or(`id.eq.${createdBy},auth_user_id.eq.${createdBy}`)
         .maybeSingle();
@@ -2423,14 +2646,51 @@ app.post('/api/sales/complete', async (req, res) => {
         effectiveCreatedBy = cu.id;
       }
     }
-    if (!effectiveCreatedBy && shiftId) {
+
+    // If no shiftId provided, check active open shift for this client & warehouse
+    if (!effectiveShiftId) {
+      let openShiftQuery = supabaseAdmin
+        .from('shifts')
+        .select('id, opened_by')
+        .eq('client_id', clientId)
+        .eq('status', 'open');
+      if (warehouseId) {
+        openShiftQuery = openShiftQuery.eq('warehouse_id', warehouseId);
+      }
+      const { data: activeShiftRow } = await openShiftQuery
+        .order('opened_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (activeShiftRow) {
+        effectiveShiftId = activeShiftRow.id;
+        if (!effectiveCreatedBy) {
+          effectiveCreatedBy = activeShiftRow.opened_by;
+        }
+      }
+    } else if (!effectiveCreatedBy && effectiveShiftId) {
       const { data: sh } = await supabaseAdmin
         .from('shifts')
         .select('opened_by')
-        .eq('id', shiftId)
+        .eq('id', effectiveShiftId)
         .maybeSingle();
       if (sh?.opened_by) {
         effectiveCreatedBy = sh.opened_by;
+      }
+    }
+
+    // If still no effectiveCreatedBy, fallback to first active user of client
+    if (!effectiveCreatedBy) {
+      const { data: fallbackUser } = await supabaseAdmin
+        .from('client_users')
+        .select('id')
+        .eq('client_id', clientId)
+        .eq('status', 'active')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (fallbackUser) {
+        effectiveCreatedBy = fallbackUser.id;
       }
     }
 
@@ -2439,7 +2699,7 @@ app.post('/api/sales/complete', async (req, res) => {
       .from('sales')
       .insert({
         client_id: clientId,
-        shift_id: shiftId || null,
+        shift_id: effectiveShiftId || null,
         invoice_number: invoiceNumber,
         sale_date: new Date().toISOString(),
         customer_id: customerId,
@@ -2537,7 +2797,7 @@ app.post('/api/sales/complete', async (req, res) => {
     }
 
     // 7. Cash Drawer movement if cash payment on active shift
-    if (shiftId) {
+    if (effectiveShiftId) {
       const cashPaid = payments
         .filter((p: any) => p.payment_method === 'cash')
         .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
@@ -2547,11 +2807,11 @@ app.post('/api/sales/complete', async (req, res) => {
         try {
           await supabaseAdmin.from('cash_drawer_transactions').insert({
             client_id: clientId,
-            shift_id: shiftId,
+            shift_id: effectiveShiftId,
             transaction_type: 'cash_in',
             amount: actualCashAdded,
             reason: `مبيعات نقدية فاتورة ${invoiceNumber}`,
-            performed_by: createdBy,
+            performed_by: effectiveCreatedBy,
           });
         } catch {}
       }
@@ -2565,10 +2825,174 @@ app.post('/api/sales/complete', async (req, res) => {
       paid_amount: actualPaidAmount,
       change_amount: changeAmount,
       sale_date: saleData.sale_date,
+      shift_id: effectiveShiftId,
     });
   } catch (err: any) {
     console.error('Server /api/sales/complete error:', err);
     return res.status(500).json({ error: err.message || 'خطأ أثناء تسجيل الفاتورة' });
+  }
+});
+
+app.get('/api/sales', async (req, res) => {
+  try {
+    const clientId = (req.query.clientId as string) || (req.query.client_id as string);
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId مطلوب' });
+    }
+
+    const search = ((req.query.search as string) || '').trim();
+    const warehouseId = req.query.warehouseId as string;
+    const saleStatus = req.query.saleStatus as string;
+    const paymentStatus = req.query.paymentStatus as string;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const page = parseInt((req.query.page as string) || '1', 10);
+    const pageSize = parseInt((req.query.pageSize as string) || '20', 10);
+
+    let query = supabaseAdmin
+      .from('sales')
+      .select(`
+        *,
+        warehouse:warehouses(id, name, code),
+        cashier:client_users!sales_created_by_fkey(id, name, role, email),
+        items:sale_items(id, product_name_snapshot, sku_snapshot, quantity, unit_price, line_total),
+        payments:sale_payments(id, payment_method, amount, reference)
+      `, { count: 'exact' })
+      .eq('client_id', clientId);
+
+    if (warehouseId && warehouseId !== 'all') {
+      query = query.eq('warehouse_id', warehouseId);
+    }
+    if (saleStatus && saleStatus !== 'all') {
+      query = query.eq('sale_status', saleStatus);
+    }
+    if (paymentStatus && paymentStatus !== 'all') {
+      query = query.eq('payment_status', paymentStatus);
+    }
+    if (startDate) {
+      query = query.gte('sale_date', `${startDate}T00:00:00.000Z`);
+    }
+    if (endDate) {
+      query = query.lte('sale_date', `${endDate}T23:59:59.999Z`);
+    }
+    if (search) {
+      query = query.ilike('invoice_number', `%${search}%`);
+    }
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    query = query.order('sale_date', { ascending: false }).range(from, to);
+
+    const { data: salesRows, error: salesErr, count } = await query;
+    if (salesErr) {
+      console.error('Error fetching sales via API:', salesErr);
+      return res.status(500).json({ error: salesErr.message });
+    }
+
+    // Secondary lookup if any cashier is missing: lookup created_by or shift_id opened_by
+    const missingCashierUserIds = new Set<string>();
+    const missingShiftIds = new Set<string>();
+    for (const s of (salesRows || [])) {
+      if (!s.cashier?.name) {
+        if (s.created_by) missingCashierUserIds.add(s.created_by);
+        else if (s.shift_id) missingShiftIds.add(s.shift_id);
+      }
+    }
+
+    const userMap = new Map<string, any>();
+    if (missingCashierUserIds.size > 0) {
+      const { data: cuList } = await supabaseAdmin
+        .from('client_users')
+        .select('id, name, role, email')
+        .in('id', Array.from(missingCashierUserIds));
+      for (const cu of (cuList || [])) {
+        userMap.set(cu.id, cu);
+      }
+    }
+
+    if (missingShiftIds.size > 0) {
+      const { data: shiftList } = await supabaseAdmin
+        .from('shifts')
+        .select(`
+          id, opened_by,
+          opened_by_user:client_users!shifts_opened_by_fkey(id, name, role, email)
+        `)
+        .in('id', Array.from(missingShiftIds));
+      for (const sh of (shiftList || [])) {
+        if (sh.opened_by_user) {
+          userMap.set(`shift_${sh.id}`, sh.opened_by_user);
+        }
+      }
+    }
+
+    // Default fallback cashier for this client if all else fails
+    let defaultClientUser: any = null;
+    const { data: defUsers } = await supabaseAdmin
+      .from('client_users')
+      .select('id, name, role, email')
+      .eq('client_id', clientId)
+      .eq('status', 'active')
+      .limit(1);
+    if (defUsers && defUsers.length > 0) {
+      defaultClientUser = defUsers[0];
+    }
+
+    const enrichedSales = (salesRows || []).map((s: any) => {
+      let resolvedCashier = s.cashier;
+      if (!resolvedCashier?.name && s.created_by && userMap.has(s.created_by)) {
+        resolvedCashier = userMap.get(s.created_by);
+      }
+      if (!resolvedCashier?.name && s.shift_id && userMap.has(`shift_${s.shift_id}`)) {
+        resolvedCashier = userMap.get(`shift_${s.shift_id}`);
+      }
+      if (!resolvedCashier?.name && defaultClientUser) {
+        resolvedCashier = defaultClientUser;
+      }
+      return {
+        ...s,
+        cashier: resolvedCashier || { name: 'الكاشير' }
+      };
+    });
+
+    // Compute stats
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const { data: allSalesForStats } = await supabaseAdmin
+      .from('sales')
+      .select('total_amount, sale_status, sale_date')
+      .eq('client_id', clientId);
+
+    let totalSalesAmount = 0;
+    let todaySalesAmount = 0;
+    let completedCount = 0;
+    let voidedCount = 0;
+
+    for (const s of (allSalesForStats || [])) {
+      const amt = Number(s.total_amount || 0);
+      if (s.sale_status === 'completed') {
+        completedCount++;
+        totalSalesAmount += amt;
+        if (s.sale_date?.startsWith(todayStr)) {
+          todaySalesAmount += amt;
+        }
+      } else if (s.sale_status === 'voided') {
+        voidedCount++;
+      }
+    }
+
+    return res.json({
+      success: true,
+      sales: enrichedSales,
+      totalCount: count !== null && count !== undefined ? count : enrichedSales.length,
+      stats: {
+        totalSalesAmount,
+        todaySalesAmount,
+        completedCount,
+        voidedCount
+      }
+    });
+  } catch (err: any) {
+    console.error('GET /api/sales error:', err);
+    return res.status(500).json({ error: err.message || 'Error fetching sales' });
   }
 });
 

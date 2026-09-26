@@ -129,10 +129,6 @@ export function Devices() {
 
   // Deactivate device handler
   const handleDeactivateDevice = async (device: Device) => {
-    if (!window.confirm(`هل أنت متأكد من رغبتك في إلغاء تفعيل الجهاز "${device.device_name}"؟ سيتم تحرير المقعد في الترخيص فوراً دون حذف سجل الجهاز.`)) {
-      return;
-    }
-
     try {
       const result = await deactivateDevice(device.id, 'إلغاء التفعيل اليدوي من قائمة الأجهزة');
       if (result.success) {

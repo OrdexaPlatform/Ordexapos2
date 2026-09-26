@@ -103,9 +103,7 @@ export function Licenses() {
       expired: 'انتهاء',
     };
 
-    if (!window.confirm(`هل أنت متأكد من ${labels[newStatus] || newStatus} هذا الترخيص؟`)) {
-      return;
-    }
+    const toastId = toast.loading(`جارٍ ${labels[newStatus] || newStatus} الترخيص...`);
 
     try {
       const { error } = await supabase
@@ -129,11 +127,11 @@ export function Licenses() {
         },
       });
 
-      toast.success('تم تحديث حالة الترخيص بنجاح');
+      toast.success('تم تحديث حالة الترخيص بنجاح', { id: toastId });
       fetchLicenses();
     } catch (err: any) {
       console.error('Error changing status:', err);
-      toast.error(err.message || 'فشل في تحديث حالة الترخيص');
+      toast.error(err.message || 'فشل في تحديث حالة الترخيص', { id: toastId });
     }
   };
 

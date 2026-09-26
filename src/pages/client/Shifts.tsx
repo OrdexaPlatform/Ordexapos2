@@ -19,6 +19,7 @@ import {
   Plus
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
+import { useClientStore } from '../../store/clientStore';
 import { useShiftStore } from '../../store/shiftStore';
 import { useCurrency } from '../../hooks/useCurrency';
 import { shiftService } from '../../lib/shiftService';
@@ -32,6 +33,7 @@ import toast from 'react-hot-toast';
 
 export const ShiftsPage: React.FC = () => {
   const { clientUser } = useAuthStore();
+  const { client } = useClientStore();
   const { activeShift, loadActiveShift } = useShiftStore();
   const { currencySymbol, formatCurrency } = useCurrency();
 
@@ -50,7 +52,7 @@ export const ShiftsPage: React.FC = () => {
   const [selectedShiftForMovement, setSelectedShiftForMovement] = useState<Shift | null>(null);
   const [selectedShiftForReport, setSelectedShiftForReport] = useState<Shift | null>(null);
 
-  const clientId = clientUser?.client_id;
+  const clientId = clientUser?.client_id || client?.id;
 
   const loadData = async () => {
     if (!clientId) return;

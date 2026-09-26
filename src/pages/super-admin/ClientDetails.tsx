@@ -189,12 +189,52 @@ export function ClientDetails() {
   const handleToggleUserStatus = async (userId: string, currentStatus: string) => {
     if (!client) return;
     const nextStatus = currentStatus === 'active' ? 'inactive' : 'active';
+    const toastId = toast.loading(nextStatus === 'inactive' ? 'جارٍ تعطيل حساب المستخدم...' : 'جارٍ تفعيل حساب المستخدم...');
     try {
       await toggleClientUserStatus(userId, client.id, nextStatus as any);
-      toast.success('تم تحديث حالة المستخدم بنجاح');
+      toast.success(nextStatus === 'inactive' ? 'تم إيقاف/تعطيل الحساب بنجاح' : 'تم تفعيل الحساب بنجاح', { id: toastId });
       fetchClientData();
     } catch (err: any) {
-      toast.error('فشل في تحديث حالة المستخدم');
+      toast.error(err.message || 'فشل في تحديث حالة المستخدم', { id: toastId });
+    }
+  };
+
+  // Direct Client status update (Suspend / Activate)
+  const [isUpdatingClientStatus, setIsUpdatingClientStatus] = useState<boolean>(false);
+  const handleClientStatusChange = async (newStatus: 'active' | 'suspended') => {
+    if (!client || !id) return;
+    setIsUpdatingClientStatus(true);
+    const toastId = toast.loading(newStatus === 'suspended' ? 'جارٍ إيقاف حساب المنشأة...' : 'جارٍ تفعيل حساب المنشأة...');
+
+    try {
+      let success = false;
+      try {
+        const res = await fetch('/api/client/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId: id, status: newStatus }),
+        });
+        if (res.ok) success = true;
+      } catch (e) {
+        console.warn('API call failed, falling back to Supabase:', e);
+      }
+
+      if (!success) {
+        const { error } = await supabase
+          .from('clients')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (error) throw error;
+      }
+
+      setClient({ ...client, status: newStatus });
+      toast.success(newStatus === 'suspended' ? 'تم إيقاف حساب المنشأة بنجاح' : 'تم تفعيل حساب المنشأة بنجاح', { id: toastId });
+      fetchClientData();
+    } catch (err: any) {
+      console.error('Error changing client status:', err);
+      toast.error(err.message || 'فشل تحديث حالة المنشأة', { id: toastId });
+    } finally {
+      setIsUpdatingClientStatus(false);
     }
   };
 
@@ -205,9 +245,8 @@ export function ClientDetails() {
       suspended: 'إيقاف',
       revoked: 'إلغاء نهائي',
     };
-    if (!window.confirm(`هل أنت متأكد من ${statusLabels[newStatus] || newStatus} هذا الترخيص؟`)) {
-      return;
-    }
+
+    const toastId = toast.loading(`جارٍ ${statusLabels[newStatus] || newStatus} الترخيص...`);
 
     try {
       const { error } = await supabase
@@ -224,11 +263,11 @@ export function ClientDetails() {
         metadata: { client_id: id, newStatus },
       });
 
-      toast.success('تم تحديث حالة الترخيص بنجاح');
+      toast.success('تم تحديث حالة الترخيص بنجاح', { id: toastId });
       fetchClientData();
     } catch (err: any) {
       console.error('Error changing license status:', err);
-      toast.error(err.message || 'فشل في تحديث حالة الترخيص');
+      toast.error(err.message || 'فشل في تحديث حالة الترخيص', { id: toastId });
     }
   };
 
@@ -278,9 +317,6 @@ export function ClientDetails() {
 
   const handleLogoRemove = async () => {
     if (!id || !client) return;
-    if (!window.confirm('هل أنت متأكد من رغبتك في حذف شعار العميل والعودة للشعار الافتراضي؟')) {
-      return;
-    }
 
     setIsUpdatingLogo(true);
     const toastId = toast.loading('جاري حذف شعار العميل...');
@@ -473,6 +509,38 @@ export function ClientDetails() {
               <Edit3 className="h-4 w-4" />
               <span>تعديل البيانات</span>
             </button>
+
+            {client.status === 'active' ? (
+              <button
+                type="button"
+                disabled={isUpdatingClientStatus}
+                onClick={() => handleClientStatusChange('suspended')}
+                className="inline-flex items-center gap-2 rounded-md bg-amber-50 px-3.5 py-2 text-sm font-semibold text-amber-700 border border-amber-300 hover:bg-amber-100 shadow-sm transition-colors disabled:opacity-50"
+                title="إيقاف حساب المنشأة وتعطيل الدخول مؤقتاً"
+              >
+                {isUpdatingClientStatus ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+                ) : (
+                  <Ban className="h-4 w-4 text-amber-600" />
+                )}
+                <span>إيقاف حساب المنشأة</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={isUpdatingClientStatus}
+                onClick={() => handleClientStatusChange('active')}
+                className="inline-flex items-center gap-2 rounded-md bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 border border-emerald-300 hover:bg-emerald-100 shadow-sm transition-colors disabled:opacity-50"
+                title="تفعيل حساب المنشأة وتمكين الدخول"
+              >
+                {isUpdatingClientStatus ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                )}
+                <span>تفعيل حساب المنشأة</span>
+              </button>
+            )}
 
             <button
               onClick={() => setIsNewLicenseModalOpen(true)}
@@ -770,6 +838,7 @@ export function ClientDetails() {
             users={users}
             onAddUser={() => setIsAddUserModalOpen(true)}
             onToggleStatus={handleToggleUserStatus}
+            onUserUpdated={fetchClientData}
           />
 
           {/* Licenses List Section */}

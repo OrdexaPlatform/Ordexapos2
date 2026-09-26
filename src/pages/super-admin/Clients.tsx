@@ -39,19 +39,45 @@ export function Clients() {
     fetchClients();
   }, [search]);
 
+  const [updatingClientId, setUpdatingClientId] = React.useState<string | null>(null);
+
   const handleStatusChange = async (clientId: string, newStatus: string) => {
-    if (!window.confirm(`هل أنت متأكد من تغيير حالة العميل إلى ${newStatus}؟`)) return;
+    setUpdatingClientId(clientId);
+    const toastId = toast.loading(newStatus === 'suspended' ? 'جارٍ إيقاف حساب العميل...' : 'جارٍ تفعيل حساب العميل...');
 
     try {
-      const { error } = await supabase
-        .from('clients')
-        .update({ status: newStatus })
-        .eq('id', clientId);
+      // 1. Try server-side API first for guaranteed DB update
+      let success = false;
+      try {
+        const res = await fetch('/api/client/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId, status: newStatus }),
+        });
+        if (res.ok) {
+          success = true;
+        }
+      } catch (apiErr) {
+        console.warn('API /api/client/status error, falling back to direct Supabase:', apiErr);
+      }
 
-      if (error) throw error;
+      // 2. Direct Supabase fallback if API failed
+      if (!success) {
+        const { error } = await supabase
+          .from('clients')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', clientId);
+
+        if (error) throw error;
+      }
       
-      toast.success('تم تغيير حالة العميل بنجاح');
+      toast.success(newStatus === 'suspended' ? 'تم إيقاف حساب العميل بنجاح' : 'تم تفعيل حساب العميل بنجاح', { id: toastId });
       
+      // Update local state immediately
+      setClients((prev) =>
+        prev.map((c) => (c.id === clientId ? { ...c, status: newStatus } : c))
+      );
+
       await logActivity({
         action: 'change_client_status',
         entityType: 'client',
@@ -60,9 +86,11 @@ export function Clients() {
       });
       
       fetchClients();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating status:', error);
-      toast.error('حدث خطأ أثناء تغيير الحالة');
+      toast.error(error.message || 'حدث خطأ أثناء تغيير الحالة', { id: toastId });
+    } finally {
+      setUpdatingClientId(null);
     }
   };
 
@@ -222,19 +250,29 @@ export function Clients() {
                         
                         {client.status === 'active' ? (
                           <button 
+                            disabled={updatingClientId === client.id}
                             onClick={() => handleStatusChange(client.id, 'suspended')}
-                            className="text-amber-500 hover:text-amber-600 transition-colors" 
-                            title="إيقاف العميل"
+                            className="text-amber-500 hover:text-amber-600 transition-colors disabled:opacity-40" 
+                            title="إيقاف حساب العميل مؤقتاً"
                           >
-                            <Ban className="h-4 w-4" />
+                            {updatingClientId === client.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
+                            ) : (
+                              <Ban className="h-4 w-4" />
+                            )}
                           </button>
                         ) : (
                           <button 
+                            disabled={updatingClientId === client.id}
                             onClick={() => handleStatusChange(client.id, 'active')}
-                            className="text-green-500 hover:text-green-600 transition-colors" 
-                            title="تفعيل العميل"
+                            className="text-emerald-500 hover:text-emerald-600 transition-colors disabled:opacity-40" 
+                            title="تفعيل حساب العميل"
                           >
-                            <CheckCircle className="h-4 w-4" />
+                            {updatingClientId === client.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin text-emerald-500" />
+                            ) : (
+                              <CheckCircle className="h-4 w-4" />
+                            )}
                           </button>
                         )}
                       </div>

@@ -147,7 +147,7 @@ export async function provisionClientUser(
 }
 
 /**
- * Updates client user details (name, phone, role, custom_permissions)
+ * Updates client user details (name, phone, role, status, custom_permissions)
  */
 export async function updateClientUser(
   userId: string,
@@ -156,10 +156,37 @@ export async function updateClientUser(
     name?: string;
     phone?: string | null;
     role?: ClientUserRole;
+    status?: ClientUserStatus;
     custom_permissions?: string[];
   },
   previousRole?: ClientUserRole
 ): Promise<ClientUser> {
+  // 1. Try server-side API first for guaranteed permissions bypass
+  try {
+    const res = await fetch('/api/client-user/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        clientId,
+        name: updates.name,
+        phone: updates.phone,
+        role: updates.role,
+        status: updates.status,
+        custom_permissions: updates.custom_permissions,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.user) {
+        return data.user as ClientUser;
+      }
+    }
+  } catch (apiErr) {
+    console.warn('API call to /api/client-user/update failed, trying direct Supabase query:', apiErr);
+  }
+
+  // 2. Direct Supabase fallback
   const payload: any = {
     updated_at: new Date().toISOString(),
   };
@@ -167,6 +194,7 @@ export async function updateClientUser(
   if (updates.name !== undefined) payload.name = updates.name.trim();
   if (updates.phone !== undefined) payload.phone = updates.phone ? updates.phone.trim() : null;
   if (updates.role !== undefined) payload.role = updates.role;
+  if (updates.status !== undefined) payload.status = updates.status;
   if (updates.custom_permissions !== undefined) payload.custom_permissions = updates.custom_permissions;
 
   const { data, error } = await supabaseAnonQuery
@@ -217,6 +245,24 @@ export async function toggleClientUserStatus(
   clientId: string,
   newStatus: ClientUserStatus
 ): Promise<ClientUser> {
+  // 1. Try server-side API endpoint first (bypasses RLS issues)
+  try {
+    const res = await fetch('/api/client-user/toggle-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, clientId, status: newStatus }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.user) {
+        return data.user as ClientUser;
+      }
+    }
+  } catch (apiErr) {
+    console.warn('API call to /api/client-user/toggle-status failed, trying direct Supabase query:', apiErr);
+  }
+
+  // 2. Direct Supabase query fallback
   const { data, error } = await supabaseAnonQuery
     .from('client_users')
     .update({

@@ -105,12 +105,6 @@ export function BuildDetails() {
   const handleTransition = async (nextStatus: BuildStatus, actionLabel: string) => {
     if (!build) return;
 
-    if (nextStatus === 'archived') {
-      if (!window.confirm('هل أنت متأكد من رغبتك في أرشفة هذا الإصدار؟ لن يتمكن العملاء من استخدامه للتحميل.')) {
-        return;
-      }
-    }
-
     setIsUpdatingStatus(true);
     try {
       const result = await transitionBuildStatus(build.id, nextStatus, `تم تغيير الحالة إلى ${actionLabel}`);

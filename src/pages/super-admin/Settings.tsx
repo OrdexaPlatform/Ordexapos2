@@ -64,10 +64,6 @@ export function Settings() {
   };
 
   const handleResetIcon = async () => {
-    if (!window.confirm('هل أنت متأكد من رغبتك في حذف الشعار المخصص واستعادة أيقونة Ordexa الافتراضية؟')) {
-      return;
-    }
-
     setSaving(true);
     const toastId = toast.loading('جاري استعادة الأيقونة الافتراضية...');
     try {

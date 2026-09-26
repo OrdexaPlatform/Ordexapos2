@@ -162,7 +162,13 @@ export function TreasuryPage() {
       setIsModalOpen(false);
       setAmount('');
       setReason('');
-      await loadTransactions(clientId);
+      await Promise.all([
+        loadTransactions(clientId),
+        loadActiveShift(clientId),
+      ]);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('ordexa:shift-updated'));
+      }
     } catch (err: any) {
       toast.error(err.message || 'فشل تسجيل حركة النقدية');
     } finally {
